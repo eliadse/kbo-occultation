@@ -80,6 +80,9 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
     )
 
     weights = spec_w * filt_w
+    
+    #if bandpass.lam_min_nm != bandpass.lam_max_nm:
+    #    weights /= weights.sum()
     weights /= weights.sum()
 
     # ─── Compute intensity ─────────────────────────────
@@ -146,5 +149,5 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
     for lam_m, w in zip(lambdas_m, weights):
         if w < 1e-12:
             continue
-        total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int=N_int)
-    return r_obs, total
+        total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int)
+    return x_km, total
