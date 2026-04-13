@@ -12,7 +12,7 @@ from kbo_occultation import (
 
 grid = GridConfig(5000, 500)
 num = NumericalConfig()
-star = StarConfig(temperature_K=20000, angular_radius_mas=0.03)
+star = StarConfig(temperature_K=20000, angular_radius_mas=0.027)
 kbo = KBOConfig(radius_m=500, distance_au=40.0)
 
 # Simulate mono point
@@ -31,10 +31,11 @@ x, Ioff = compute_lightcurve(kbo, star, band, grid, num)
 
 plt.plot(x, Imono, label='Monochromatic point source')
 #plt.plot(x, Ipoly, label='Polychromatic point source')
-plt.plot(x, Istar, label='0.03mas radius star')
-plt.plot(x, Ioff, label='Monochromatic offset source')
+plt.plot(x, Istar, label=f'{star.angular_radius_mas}mas radius star')
+plt.plot(x, Ioff, label=f'{star.angular_radius_mas}mas radius star, {kbo.impact_parameter_m}m offset')
 plt.grid()
 plt.legend(loc="upper left")
 plt.xlabel("Position (m)")
 plt.ylabel("Normalized intensity")
+plt.savefig(f"./{kbo.radius_m}mKBO_{kbo.impact_parameter_m}mOffset_{star.angular_radius_mas}mas.png")
 plt.show()

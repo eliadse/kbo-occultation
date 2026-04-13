@@ -4,6 +4,8 @@ from .simulation import (
     compute_lightcurve,
     simulate_poly_point
 )
+from .instruments import *
+
 from .config import (
     KBOConfig,
     StarConfig,
