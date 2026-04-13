@@ -84,10 +84,6 @@ def apply_stellar_disk_2d(x_m, intensity_radial, r_grid_m, star_radius_m, impact
     # --- Convolution ---
     convolved = np.zeros_like(x_m)
 
-    #for i, x in enumerate(x_m):
-    #    r = np.sqrt((x + dx)**2 + dy**2)
-    #    convolved[i] = interp_I(r).mean()
-
     for i, x in enumerate(x_m):
         r = np.sqrt((x + dx)**2 + (impact_parameter_m + dy)**2)
         convolved[i] = interp_I(r).mean()
@@ -143,18 +139,6 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
     weights /= weights.sum()
 
     # ─── Compute intensity ─────────────────────────────
-
-    #intensity_total = np.zeros_like(x_m)
-
-    #for lam, w in zip(lambdas_m, weights):
-    #    I = fresnel_intensity_radial(
-    #        x_m,
-    #        R_m,
-    #        D_m,
-    #        lam,
-    #        n_int=numerics.n_int
-    #    )
-    #    intensity_total += w * I
     intensity_radial_total = np.zeros_like(r_grid_m)
 
     for lam, w in zip(lambdas_m, weights):
@@ -176,16 +160,8 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
             b_m,
             numerics.n_star_side
         )
-    #if numerics.n_star_side > 1:
-    #    intensity_total = apply_stellar_disk(
-    #        x_m,
-    #        intensity_total,
-    #        r_star_m,
-    #        numerics.n_star_side
-    #    )
     return x_m, intensity_total
 
-#def simulate_poly_point(x_m, b_m, R_m, D_m, lambdas_m, weights, N_int=800):
 def simulate_poly_point(kbo, star, bandpass, grid, numerics):
     
     # KBO parameters
