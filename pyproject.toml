@@ -2,9 +2,10 @@
 name = "kbo-occultation"
 version = "0.1.0"
 description = "Simulation of KBO stellar occultation diffraction patterns"
-authors = [{name="Your Name"}]
+authors = [{name="eliadse"}]
 dependencies = [
     "numpy",
+    "matplotlib",
     "scipy"
 ]
 
