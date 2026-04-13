@@ -107,3 +107,44 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
             numerics.n_star_side
         )
     return x_km, intensity_total
+
+#def simulate_poly_point(x_m, b_m, R_m, D_m, lambdas_m, weights, N_int=800):
+def simulate_poly_point(kbo, star, bandpass, grid, numerics):
+    
+    # KBO parameters
+    D_m = kbo.distance_au * AU_m
+    R_m = kbo.radius_km * km_m
+    b_m = kbo.impact_parameter_km * km_m
+    
+    # Spatial grid
+    x_km = np.linspace(-grid.x_max_km, grid.x_max_km, grid.n_x)
+    x_m = x_km * km_m
+
+    # Wavelength grid
+    lambdas_nm = np.linspace( 
+        bandpass.lam_min_nm, 
+        bandpass.lam_max_nm,
+        bandpass.n_lambda
+    )
+    lambdas_m = lambdas_nm * nm_m
+
+    # Spectral weights
+    spec_w = planck_photon(lambdas_m, star.temperature_K)
+    filt_w = filter_transmission(
+        lambdas_nm,
+        bandpass.lam_min_nm,
+        bandpass.lam_max_nm
+    )
+    weights = spec_w * filt_w
+    weights /= weights.sum()
+
+    N_int = numerics.n_int
+    
+    """ Monochromatic and polychromatic point source"""
+    r_obs = np.sqrt(x_m**2 + b_m**2)
+    total = np.zeros(len(x_m))
+    for lam_m, w in zip(lambdas_m, weights):
+        if w < 1e-12:
+            continue
+        total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int=N_int)
+    return total
