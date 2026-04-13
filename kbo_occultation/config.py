@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 @dataclass
 class KBOConfig:
-    radius_km: float
+    radius_m: float
     distance_au: float
-    impact_parameter_km: float = 0.0
+    impact_parameter_m: float = 0.0
 
 @dataclass
 class StarConfig:
@@ -21,7 +21,7 @@ class BandpassConfig:
 
 @dataclass
 class GridConfig:
-    x_max_km: float
+    x_max_m: float
     n_x: int
 
 @dataclass

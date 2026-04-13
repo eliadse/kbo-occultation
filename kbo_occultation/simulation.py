@@ -44,24 +44,82 @@ def apply_stellar_disk(x_m, intensity, star_radius_m, n_star_side):
 
     return convolved
 
+def apply_stellar_disk_2d(x_m, intensity_radial, r_grid_m, star_radius_m, impact_parameter_m, n_star_side):
+    """
+    Exact 2D convolution with a uniform stellar disk.
+
+    Parameters
+    ----------
+    x_m : 1D array
+        Chord positions
+    intensity_radial : 1D array
+        I(r) evaluated on r_grid_m
+    r_grid_m : 1D array
+        Radial grid corresponding to intensity_radial
+    star_radius_m : float
+        Projected stellar radius
+    impact_parameter_m: float
+        Distance of the KBO plane from the star center
+    n_star_side : int
+        Resolution of stellar disk grid
+
+    Returns
+    -------
+    convolved_intensity : 1D array
+    """
+
+    # --- Build stellar disk sampling ---
+    offsets = np.linspace(-star_radius_m, star_radius_m, n_star_side)
+    dx, dy = np.meshgrid(offsets, offsets)
+
+    mask = dx**2 + dy**2 <= star_radius_m**2
+
+    dx = dx[mask]
+    dy = dy[mask]
+
+    # --- Interpolator for radial intensity ---
+    def interp_I(r):
+        return np.interp(r, r_grid_m, intensity_radial, left=1.0, right=1.0)
+
+    # --- Convolution ---
+    convolved = np.zeros_like(x_m)
+
+    #for i, x in enumerate(x_m):
+    #    r = np.sqrt((x + dx)**2 + dy**2)
+    #    convolved[i] = interp_I(r).mean()
+
+    for i, x in enumerate(x_m):
+        r = np.sqrt((x + dx)**2 + (impact_parameter_m + dy)**2)
+        convolved[i] = interp_I(r).mean()
+    
+    return convolved
+
+
 def compute_lightcurve(kbo, star, bandpass, grid, numerics):
     """
     Compute polychromatic occultation light curve.
 
     Returns
     -------
-    x_km : array
+    x_m : array
     intensity : array
     """
 
     # ─── Derived quantities ─────────────────────────────
 
     D_m = kbo.distance_au * AU_m
-    R_m = kbo.radius_km * km_m
+    R_m = kbo.radius_m
+    b_m = kbo.impact_parameter_m
 
+    # Star angular radius projected in the KBO, in meters
+    star_radius_m = star.angular_radius_mas * mas_to_rad * D_m
+    
     # Spatial grid
-    x_km = np.linspace(-grid.x_max_km, grid.x_max_km, grid.n_x)
-    x_m = x_km * km_m
+    x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
+
+    # Define radial grid (must cover all possible r)
+    r_max = np.sqrt((x_m.max() + star_radius_m)**2 + star_radius_m**2)
+    r_grid_m = np.linspace(0, r_max, numerics.n_r_grid)
 
     # Wavelength grid
     lambdas_nm = np.linspace(
@@ -80,48 +138,63 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
     )
 
     weights = spec_w * filt_w
-    
     #if bandpass.lam_min_nm != bandpass.lam_max_nm:
     #    weights /= weights.sum()
     weights /= weights.sum()
 
     # ─── Compute intensity ─────────────────────────────
 
-    intensity_total = np.zeros_like(x_m)
+    #intensity_total = np.zeros_like(x_m)
+
+    #for lam, w in zip(lambdas_m, weights):
+    #    I = fresnel_intensity_radial(
+    #        x_m,
+    #        R_m,
+    #        D_m,
+    #        lam,
+    #        n_int=numerics.n_int
+    #    )
+    #    intensity_total += w * I
+    intensity_radial_total = np.zeros_like(r_grid_m)
 
     for lam, w in zip(lambdas_m, weights):
-        I = fresnel_intensity_radial(
-            x_m,
+        I_r = fresnel_intensity_radial(
+            r_grid_m,
             R_m,
             D_m,
             lam,
             n_int=numerics.n_int
         )
-        intensity_total += w * I
-
-    # projected stellar radius
-    r_star_m = star.angular_radius_mas * mas_to_rad * D_m
+        intensity_radial_total += w * I_r
 
     if numerics.n_star_side > 1:
-        intensity_total = apply_stellar_disk(
+        intensity_total = apply_stellar_disk_2d(
             x_m,
-            intensity_total,
-            r_star_m,
+            intensity_radial_total,
+            r_grid_m,
+            star_radius_m,
+            b_m,
             numerics.n_star_side
         )
-    return x_km, intensity_total
+    #if numerics.n_star_side > 1:
+    #    intensity_total = apply_stellar_disk(
+    #        x_m,
+    #        intensity_total,
+    #        r_star_m,
+    #        numerics.n_star_side
+    #    )
+    return x_m, intensity_total
 
 #def simulate_poly_point(x_m, b_m, R_m, D_m, lambdas_m, weights, N_int=800):
 def simulate_poly_point(kbo, star, bandpass, grid, numerics):
     
     # KBO parameters
     D_m = kbo.distance_au * AU_m
-    R_m = kbo.radius_km * km_m
-    b_m = kbo.impact_parameter_km * km_m
+    R_m = kbo.radius_m
+    b_m = kbo.impact_parameter_m
     
     # Spatial grid
-    x_km = np.linspace(-grid.x_max_km, grid.x_max_km, grid.n_x)
-    x_m = x_km * km_m
+    x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
 
     # Wavelength grid
     lambdas_nm = np.linspace( 
@@ -150,4 +223,4 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
         if w < 1e-12:
             continue
         total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int)
-    return x_km, total
+    return x_m, total
