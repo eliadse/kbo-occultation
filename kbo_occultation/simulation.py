@@ -12,6 +12,37 @@ from .physics import (
     mas_to_rad,
 )
 
+def apply_stellar_disk(x_m, intensity, star_radius_m, n_star_side):
+    """
+    Convolve intensity with a uniform stellar disk.
+    """
+
+    # Build 2D grid of stellar offsets
+    R = star_radius_m
+
+    offsets = np.linspace(-R, R, n_star_side)
+    dx, dy = np.meshgrid(offsets, offsets)
+
+    mask = dx**2 + dy**2 <= R**2
+
+    dx = dx[mask]
+    dy = dy[mask]
+
+    convolved = np.zeros_like(intensity)
+
+    for shift in dx:
+        shifted = np.interp(
+            x_m + shift,
+            x_m,
+            intensity,
+            left=1.0,
+            right=1.0
+        )
+        convolved += shifted
+
+    convolved /= len(dx)
+
+    return convolved
 
 def compute_lightcurve(kbo, star, bandpass, grid, numerics):
     """
@@ -65,4 +96,14 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
         )
         intensity_total += w * I
 
+    # projected stellar radius
+    r_star_m = star.angular_radius_mas * mas_to_rad * D_m
+
+    if numerics.n_star_side > 1:
+        intensity_total = apply_stellar_disk(
+            x_m,
+            intensity_total,
+            r_star_m,
+            numerics.n_star_side
+        )
     return x_km, intensity_total

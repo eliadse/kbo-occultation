@@ -23,7 +23,7 @@ def planck_photon(lam_m, T_K):
 
 
 def filter_transmission(lam_nm, lam_min_nm, lam_max_nm):
-    """Simple trapezoidal bandpass."""
+    """Dummy filter, a simple trapezoidal bandpass."""
     lam = np.asarray(lam_nm, dtype=float)
     edge = 5.0
 
