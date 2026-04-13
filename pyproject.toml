@@ -1,0 +1,13 @@
+[project]
+name = "kbo-occultation"
+version = "0.1.0"
+description = "Simulation of KBO stellar occultation diffraction patterns"
+authors = [{name="Your Name"}]
+dependencies = [
+    "numpy",
+    "scipy"
+]
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
