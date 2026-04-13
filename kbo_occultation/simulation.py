@@ -139,7 +139,7 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
     weights /= weights.sum()
 
     N_int = numerics.n_int
-    
+
     """ Monochromatic and polychromatic point source"""
     r_obs = np.sqrt(x_m**2 + b_m**2)
     total = np.zeros(len(x_m))
@@ -147,4 +147,4 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
         if w < 1e-12:
             continue
         total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int=N_int)
-    return total
+    return r_obs, total
