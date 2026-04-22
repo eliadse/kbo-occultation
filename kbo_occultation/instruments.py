@@ -1,15 +1,16 @@
 import numpy as np
-
+from kbo_occultation import PACKAGE_DATA
 
 def load_response_file(filename):
     """
-    Load wavelength-dependent response from a text file.
+    Load wavelength-dependent response from a text 
+    file stored inside kbo_occultation/data/
 
     Expected format:
     wavelength_nm   transmission_percent
     """
 
-    data = np.loadtxt(filename)
+    data = np.loadtxt("{}/{}".format(PACKAGE_DATA, filename))
 
     lam_nm = data[:, 0]
     response = data[:, 1] / 100.0  # convert % → [0,1]

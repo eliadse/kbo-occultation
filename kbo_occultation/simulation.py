@@ -136,11 +136,11 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     #weights = spec_w * filt_w
     
     # Fast loading of MAGIC transmission
-    lam_qe, qe = load_response_file("/home/elia-dell/Projects/Python/kbo_occultation/kbo_occultation/data/optical_filter_MAGIC_QE.txt")
+    lam_qe, qe = load_response_file("optical_filter_MAGIC_QE.txt")
     qe_func = build_response_function(lam_qe, qe)
     response = qe_func
     if SII == True:
-        lam_filt, filt = load_response_file("/home/elia-dell/Projects/Python/kbo_occultation/kbo_occultation/data/optical_filter_MAGIC_SII.txt")
+        lam_filt, filt = load_response_file("optical_filter_MAGIC_SII.txt")
         filt_func = build_response_function(lam_filt, filt)
         response = combine_responses(qe_func, filt_func)
 
