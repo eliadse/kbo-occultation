@@ -88,7 +88,7 @@ def apply_stellar_disk_2d(x_m, intensity_radial, r_grid_m, star_radius_m, impact
     for i, x in enumerate(x_m):
         r = np.sqrt((x + dx)**2 + (impact_parameter_m + dy)**2)
         convolved[i] = interp_I(r).mean()
-    
+
     return convolved
 
 
@@ -213,3 +213,104 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
             continue
         total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int)
     return x_m, total
+
+class OccultationEngine:
+    """
+    Precomputes static components and evaluates occultation light curves.
+    """
+
+    def __init__(self, star, bandpass, grid, numerics, response=None):
+
+        self.numerics = numerics
+        self.star = star
+
+        # --- wavelength grid ---
+        self.lambdas_nm = np.linspace(
+            bandpass.lam_min_nm,
+            bandpass.lam_max_nm,
+            bandpass.n_lambda
+        )
+        self.lambdas_m = self.lambdas_nm * nm_m
+
+        # --- spectral weights ---
+        spec_w = planck_photon(self.lambdas_m, star.temperature_K)
+
+        if response is None:
+            filt_w = filter_transmission(
+                self.lambdas_nm,
+                bandpass.lam_min_nm,
+                bandpass.lam_max_nm
+            )
+            response_vals = filt_w
+        else:
+            response_vals = response(self.lambdas_nm)
+
+        self.weights = spec_w * response_vals
+        self.weights /= self.weights.sum()
+
+        # --- spatial grid ---
+        self.x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
+
+    def compute(self, kbo):
+        """
+        Compute occultation light curve for a given KBO.
+        """
+        
+        # --- KBO parameters ---
+        D_m = kbo.distance_au * AU_m
+        R_m = kbo.radius_m
+        b_m = kbo.impact_parameter_m
+
+        # --- star projection ---
+        r_star_m = self.star.angular_radius_mas * mas_to_rad * D_m
+
+        # --- radial grid ---
+        r_max = np.sqrt(
+            (self.x_m.max() + r_star_m)**2 +
+            (r_star_m + b_m)**2
+        )
+        r_grid_m = np.linspace(0, r_max, self.numerics.n_r_grid)
+
+        # --- polychromatic radial intensity ---
+        intensity_radial = np.zeros_like(r_grid_m)
+
+        for lam, w in zip(self.lambdas_m, self.weights):
+            I_r = fresnel_intensity_radial(
+                r_grid_m,
+                R_m,
+                D_m,
+                lam,
+                n_int=self.numerics.n_int
+            )
+            intensity_radial += w * I_r
+
+        # --- 2D stellar convolution ---
+        intensity = apply_stellar_disk_2d(
+            self.x_m,
+            intensity_radial,
+            r_grid_m,
+            r_star_m,
+            b_m,
+            self.numerics.n_star_side
+        )
+
+        return self.x_m, intensity
+
+# ───────────────────────────────────────────────────────────
+# Backward-compatible wrapper
+# ───────────────────────────────────────────────────────────
+
+def compute_lightcurve_test(kbo, star, bandpass, grid, numerics, response=None):
+    """
+    Legacy interface (kept for convenience).
+    """
+
+    engine = OccultationEngine(
+        star,
+        bandpass,
+        grid,
+        numerics,
+        response=response,
+    )
+
+    return engine.compute(kbo)

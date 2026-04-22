@@ -31,6 +31,6 @@ Thumbs.db
 *.png
 *.pdf
 
-# Data (important for your field)
-data/
 outputs/
+tests/
+.gitignore

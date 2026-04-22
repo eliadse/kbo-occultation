@@ -45,3 +45,5 @@ def combine_responses(*responses):
         return R
 
     return combined
+
+#TODO Add a function that lists all available filters and/or transmission files
