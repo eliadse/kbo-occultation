@@ -11,6 +11,7 @@ from .physics import (
     nm_m,
     mas_to_rad,
 )
+from .instruments import *
 
 def apply_stellar_disk(x_m, intensity, star_radius_m, n_star_side):
     """
@@ -91,7 +92,7 @@ def apply_stellar_disk_2d(x_m, intensity_radial, r_grid_m, star_radius_m, impact
     return convolved
 
 
-def compute_lightcurve(kbo, star, bandpass, grid, numerics):
+def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     """
     Compute polychromatic occultation light curve.
 
@@ -127,13 +128,25 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics):
 
     # Spectral weights
     spec_w = planck_photon(lambdas_m, star.temperature_K)
-    filt_w = filter_transmission(
-        lambdas_nm,
-        bandpass.lam_min_nm,
-        bandpass.lam_max_nm
-    )
+    #filt_w = filter_transmission(
+    #    lambdas_nm,
+    #    bandpass.lam_min_nm,
+    #    bandpass.lam_max_nm
+    #)
+    #weights = spec_w * filt_w
+    
+    # Fast loading of MAGIC transmission
+    lam_qe, qe = load_response_file("/home/elia-dell/Projects/Python/kbo_occultation/kbo_occultation/data/optical_filter_MAGIC_QE.txt")
+    qe_func = build_response_function(lam_qe, qe)
+    response = qe_func
+    if SII == True:
+        lam_filt, filt = load_response_file("/home/elia-dell/Projects/Python/kbo_occultation/kbo_occultation/data/optical_filter_MAGIC_SII.txt")
+        filt_func = build_response_function(lam_filt, filt)
+        response = combine_responses(qe_func, filt_func)
 
-    weights = spec_w * filt_w
+    response_vals = response(lambdas_nm)
+    weights = spec_w * response_vals
+
     #if bandpass.lam_min_nm != bandpass.lam_max_nm:
     #    weights /= weights.sum()
     weights /= weights.sum()
