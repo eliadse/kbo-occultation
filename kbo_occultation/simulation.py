@@ -278,6 +278,17 @@ class OccultationEngine:
         # --- star projection ---
         r_star_m = self.star.angular_radius_mas * mas_to_rad * D_m
 
+        if (self.star.angular_radius_mas < 0.0001):
+            # For point source testing
+            r_obs = np.sqrt(self.x_m**2 + b_m**2)
+            intensity = np.zeros(len(self.x_m))
+            
+            for lam, w in zip(self.lambdas_nm * nm_m, self.weights):
+                if w < 1e-12:
+                    continue
+                intensity += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam, self.numerics.n_int)
+            return self.x_m, intensity
+        
         # --- radial grid ---
         r_max = np.sqrt(
             (self.x_m.max() + r_star_m)**2 +
@@ -289,6 +300,9 @@ class OccultationEngine:
         intensity_radial = np.zeros_like(r_grid_m)
 
         for lam, w in zip(self.lambdas_nm * nm_m, self.weights):
+            if w < 1e-12:
+                # Skip this wavelength
+                continue
             I_r = fresnel_intensity_radial(
                 r_grid_m,
                 R_m,
