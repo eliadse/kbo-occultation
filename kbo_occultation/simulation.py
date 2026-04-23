@@ -221,8 +221,11 @@ class OccultationEngine:
 
     def __init__(self, star, bandpass, grid, numerics, response=None):
 
-        self.numerics = numerics
         self.star = star
+        self.bandpass = bandpass
+        self.numerics = numerics
+        self.temperature_K = star.temperature_K
+        self.response = response
 
         # --- wavelength grid ---
         self.lambdas_nm = np.linspace(
@@ -230,26 +233,37 @@ class OccultationEngine:
             bandpass.lam_max_nm,
             bandpass.n_lambda
         )
-        self.lambdas_m = self.lambdas_nm * nm_m
-
-        # --- spectral weights ---
-        spec_w = planck_photon(self.lambdas_m, star.temperature_K)
-
-        if response is None:
-            filt_w = filter_transmission(
-                self.lambdas_nm,
-                bandpass.lam_min_nm,
-                bandpass.lam_max_nm
-            )
-            response_vals = filt_w
-        else:
-            response_vals = response(self.lambdas_nm)
-
-        self.weights = spec_w * response_vals
-        self.weights /= self.weights.sum()
+        self.weights = self._compute_weights(response)
 
         # --- spatial grid ---
         self.x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
+
+    def _compute_weights(self, response):
+        spec_w = planck_photon(self.lambdas_nm * nm_m, self.temperature_K)
+
+        if response is None:
+            response_vals = filter_transmission(
+                self.lambdas_nm,
+                self.bandpass.lam_min_nm,
+                self.bandpass.lam_max_nm
+        )
+        else:
+            response_vals = response(self.lambdas_nm)
+
+        weights = spec_w * response_vals
+        return weights / weights.sum()
+
+    def set_response(self, response=None):
+        """
+        Update instrument response and recompute spectral weights.
+
+        Parameters
+        ----------
+        response : callable or None
+            Function R(lambda_nm). If None, uses default bandpass.
+        """
+        self.response = response
+        self.weights = self._compute_weights(response)
 
     def compute(self, kbo):
         """
@@ -274,7 +288,7 @@ class OccultationEngine:
         # --- polychromatic radial intensity ---
         intensity_radial = np.zeros_like(r_grid_m)
 
-        for lam, w in zip(self.lambdas_m, self.weights):
+        for lam, w in zip(self.lambdas_nm * nm_m, self.weights):
             I_r = fresnel_intensity_radial(
                 r_grid_m,
                 R_m,
