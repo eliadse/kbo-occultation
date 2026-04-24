@@ -29,3 +29,6 @@ class NumericalConfig:
     n_int: int = 800
     n_r_grid: int = 3000
     n_star_side: int = 32
+
+standard_sampling = 2**18
+standard_sample_duration = 2 #ns
