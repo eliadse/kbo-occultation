@@ -2,15 +2,7 @@
 
 import numpy as np
 
-from .physics import (
-    planck_photon,
-    filter_transmission,
-    fresnel_intensity_radial,
-    AU_m,
-    km_m,
-    nm_m,
-    mas_to_rad,
-)
+from .physics import (planck_photon, filter_transmission, fresnel_intensity_radial, AU_m, km_m, nm_m, mas_to_rad)
 from .instruments import *
 
 def apply_stellar_disk(x_m, intensity, star_radius_m, n_star_side):
@@ -32,13 +24,7 @@ def apply_stellar_disk(x_m, intensity, star_radius_m, n_star_side):
     convolved = np.zeros_like(intensity)
 
     for shift in dx:
-        shifted = np.interp(
-            x_m + shift,
-            x_m,
-            intensity,
-            left=1.0,
-            right=1.0
-        )
+        shifted = np.interp(x_m + shift, x_m, intensity, left=1.0, right=1.0)
         convolved += shifted
 
     convolved /= len(dx)
@@ -119,11 +105,7 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     r_grid_m = np.linspace(0, r_max, numerics.n_r_grid)
 
     # Wavelength grid
-    lambdas_nm = np.linspace(
-        bandpass.lam_min_nm,
-        bandpass.lam_max_nm,
-        bandpass.n_lambda
-    )
+    lambdas_nm = np.linspace(bandpass.lam_min_nm, bandpass.lam_max_nm, bandpass.n_lambda)
     lambdas_m = lambdas_nm * nm_m
 
     # Spectral weights
@@ -155,24 +137,11 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     intensity_radial_total = np.zeros_like(r_grid_m)
 
     for lam, w in zip(lambdas_m, weights):
-        I_r = fresnel_intensity_radial(
-            r_grid_m,
-            R_m,
-            D_m,
-            lam,
-            n_int=numerics.n_int
-        )
+        I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=numerics.n_int)
         intensity_radial_total += w * I_r
 
     if numerics.n_star_side > 1:
-        intensity_total = apply_stellar_disk_2d(
-            x_m,
-            intensity_radial_total,
-            r_grid_m,
-            star_radius_m,
-            b_m,
-            numerics.n_star_side
-        )
+        intensity_total = apply_stellar_disk_2d(x_m, intensity_radial_total, r_grid_m, star_radius_m, b_m, numerics.n_star_side)
     return x_m, intensity_total
 
 def simulate_poly_point(kbo, star, bandpass, grid, numerics):
@@ -186,20 +155,12 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
     x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
 
     # Wavelength grid
-    lambdas_nm = np.linspace( 
-        bandpass.lam_min_nm, 
-        bandpass.lam_max_nm,
-        bandpass.n_lambda
-    )
+    lambdas_nm = np.linspace(bandpass.lam_min_nm, bandpass.lam_max_nm, bandpass.n_lambda)
     lambdas_m = lambdas_nm * nm_m
 
     # Spectral weights
     spec_w = planck_photon(lambdas_m, star.temperature_K)
-    filt_w = filter_transmission(
-        lambdas_nm,
-        bandpass.lam_min_nm,
-        bandpass.lam_max_nm
-    )
+    filt_w = filter_transmission(lambdas_nm, bandpass.lam_min_nm, bandpass.lam_max_nm)
     weights = spec_w * filt_w
     weights /= weights.sum()
 
@@ -228,11 +189,7 @@ class OccultationEngine:
         self.response = response
 
         # --- wavelength grid ---
-        self.lambdas_nm = np.linspace(
-            bandpass.lam_min_nm,
-            bandpass.lam_max_nm,
-            bandpass.n_lambda
-        )
+        self.lambdas_nm = np.linspace(bandpass.lam_min_nm, bandpass.lam_max_nm, bandpass.n_lambda)
         self.weights = self._compute_weights(response)
 
         # --- spatial grid ---
@@ -242,11 +199,7 @@ class OccultationEngine:
         spec_w = planck_photon(self.lambdas_nm * nm_m, self.temperature_K)
 
         if response is None:
-            response_vals = filter_transmission(
-                self.lambdas_nm,
-                self.bandpass.lam_min_nm,
-                self.bandpass.lam_max_nm
-        )
+            response_vals = filter_transmission(self.lambdas_nm, self.bandpass.lam_min_nm, self.bandpass.lam_max_nm)
         else:
             response_vals = response(self.lambdas_nm)
 
@@ -303,24 +256,11 @@ class OccultationEngine:
             if w < 1e-12:
                 # Skip this wavelength
                 continue
-            I_r = fresnel_intensity_radial(
-                r_grid_m,
-                R_m,
-                D_m,
-                lam,
-                n_int=self.numerics.n_int
-            )
+            I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=self.numerics.n_int)
             intensity_radial += w * I_r
 
         # --- 2D stellar convolution ---
-        intensity = apply_stellar_disk_2d(
-            self.x_m,
-            intensity_radial,
-            r_grid_m,
-            r_star_m,
-            b_m,
-            self.numerics.n_star_side
-        )
+        intensity = apply_stellar_disk_2d(self.x_m, intensity_radial, r_grid_m, r_star_m, b_m, self.numerics.n_star_side)
 
         return self.x_m, intensity
 
@@ -333,12 +273,6 @@ def compute_lightcurve_test(kbo, star, bandpass, grid, numerics, response=None):
     Legacy interface (kept for convenience).
     """
 
-    engine = OccultationEngine(
-        star,
-        bandpass,
-        grid,
-        numerics,
-        response=response,
-    )
+    engine = OccultationEngine(star, bandpass, grid, numerics, response=response)
 
     return engine.compute(kbo)
