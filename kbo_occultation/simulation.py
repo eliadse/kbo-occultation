@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from .physics import (planck_photon, filter_transmission, fresnel_intensity_radial, AU_m, km_m, nm_m, mas_to_rad)
+from .physics import (planck_photon, filter_transmission, fresnel_intensity_radial, AU_m, km_m, nm_m, mas_to_rad, fresnel_point_intensity)
 from .instruments import *
 
 def simulate_poly_point(kbo, star, bandpass, grid, numerics):
@@ -36,8 +36,8 @@ def simulate_poly_point(kbo, star, bandpass, grid, numerics):
         #total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int)
         F = np.sqrt(lam_m * D_m / 2.0)
 
-        r = R_m / F
-        rho = r_obs / F
+        r = r_obs / F
+        rho = R_m / F
         total += w * fresnel_point_intensity(r, rho, N_int)
     return x_m, total
 
