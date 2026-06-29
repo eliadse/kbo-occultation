@@ -5,6 +5,42 @@ import numpy as np
 from .physics import (planck_photon, filter_transmission, fresnel_intensity_radial, AU_m, km_m, nm_m, mas_to_rad)
 from .instruments import *
 
+def simulate_poly_point(kbo, star, bandpass, grid, numerics):
+    
+    # KBO parameters
+    D_m = kbo.distance_au * AU_m
+    R_m = kbo.radius_m
+    b_m = kbo.impact_parameter_m
+    
+    # Spatial grid
+    x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
+
+    # Wavelength grid
+    lambdas_nm = np.linspace(bandpass.lam_min_nm, bandpass.lam_max_nm, bandpass.n_lambda)
+    lambdas_m = lambdas_nm * nm_m
+
+    # Spectral weights
+    spec_w = planck_photon(lambdas_m, star.temperature_K)
+    filt_w = filter_transmission(lambdas_nm, bandpass.lam_min_nm, bandpass.lam_max_nm)
+    weights = spec_w * filt_w
+    weights /= weights.sum()
+
+    N_int = numerics.n_int
+
+    """ Monochromatic and polychromatic point source"""
+    r_obs = np.sqrt(x_m**2 + b_m**2)
+    total = np.zeros(len(x_m))
+    for lam_m, w in zip(lambdas_m, weights):
+        if w < 1e-12:
+            continue
+        #total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int)
+        F = np.sqrt(lam_m * D_m / 2.0)
+
+        r = R_m / F
+        rho = r_obs / F
+        total += w * fresnel_point_intensity(r, rho, N_int)
+    return x_m, total
+
 def apply_stellar_disk(x_m, intensity, star_radius_m, n_star_side):
     """
     Convolve intensity with a uniform stellar disk.
@@ -77,7 +113,6 @@ def apply_stellar_disk_2d(x_m, intensity_radial, r_grid_m, star_radius_m, impact
 
     return convolved
 
-
 def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     """
     Compute polychromatic occultation light curve.
@@ -143,37 +178,6 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     if numerics.n_star_side > 1:
         intensity_total = apply_stellar_disk_2d(x_m, intensity_radial_total, r_grid_m, star_radius_m, b_m, numerics.n_star_side)
     return x_m, intensity_total
-
-def simulate_poly_point(kbo, star, bandpass, grid, numerics):
-    
-    # KBO parameters
-    D_m = kbo.distance_au * AU_m
-    R_m = kbo.radius_m
-    b_m = kbo.impact_parameter_m
-    
-    # Spatial grid
-    x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
-
-    # Wavelength grid
-    lambdas_nm = np.linspace(bandpass.lam_min_nm, bandpass.lam_max_nm, bandpass.n_lambda)
-    lambdas_m = lambdas_nm * nm_m
-
-    # Spectral weights
-    spec_w = planck_photon(lambdas_m, star.temperature_K)
-    filt_w = filter_transmission(lambdas_nm, bandpass.lam_min_nm, bandpass.lam_max_nm)
-    weights = spec_w * filt_w
-    weights /= weights.sum()
-
-    N_int = numerics.n_int
-
-    """ Monochromatic and polychromatic point source"""
-    r_obs = np.sqrt(x_m**2 + b_m**2)
-    total = np.zeros(len(x_m))
-    for lam_m, w in zip(lambdas_m, weights):
-        if w < 1e-12:
-            continue
-        total += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam_m, N_int)
-    return x_m, total
 
 class OccultationEngine:
     """

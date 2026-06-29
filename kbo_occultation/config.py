@@ -26,7 +26,7 @@ class GridConfig:
 
 @dataclass
 class NumericalConfig:
-    n_int: int = 800
+    n_int: int = 40
     n_r_grid: int = 3000
     n_star_side: int = 32
 
