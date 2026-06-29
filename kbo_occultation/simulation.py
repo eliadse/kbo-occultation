@@ -113,7 +113,7 @@ def apply_stellar_disk_2d(x_m, intensity_radial, r_grid_m, star_radius_m, impact
 
     return convolved
 
-def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
+def compute_lightcurve_old(kbo, star, bandpass, grid, numerics, SII=False):
     """
     Compute polychromatic occultation light curve.
 
@@ -172,7 +172,12 @@ def compute_lightcurve(kbo, star, bandpass, grid, numerics, SII=False):
     intensity_radial_total = np.zeros_like(r_grid_m)
 
     for lam, w in zip(lambdas_m, weights):
-        I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=numerics.n_int)
+        F = np.sqrt(lam * D_m / 2.0)
+
+        r = r_grid_m / F
+        rho = R_m / F
+        I_r = fresnel_point_intensity(r, rho, n_int=numerics.n_int)
+        #I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=numerics.n_int)
         intensity_radial_total += w * I_r
 
     if numerics.n_star_side > 1:
@@ -243,7 +248,12 @@ class OccultationEngine:
             for lam, w in zip(self.lambdas_nm * nm_m, self.weights):
                 if w < 1e-12:
                     continue
-                intensity += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam, self.numerics.n_int)
+
+                F = np.sqrt(lam * D_m / 2.0)
+                r = r_grid_m / F
+                rho = R_m / F
+                intensity += w * fresnel_point_intensity(r, rho, self.numerics.n_int)
+                #intensity += w * fresnel_intensity_radial(r_obs, R_m, D_m, lam, self.numerics.n_int)
             return self.x_m, intensity
         
         # --- radial grid ---
@@ -260,7 +270,11 @@ class OccultationEngine:
             if w < 1e-12:
                 # Skip this wavelength
                 continue
-            I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=self.numerics.n_int)
+            F = np.sqrt(lam * D_m / 2.0)
+            r = r_grid_m / F
+            rho = R_m / F
+            I_r = fresnel_point_intensity(r, rho, self.numerics.n_int)
+            #I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=self.numerics.n_int)
             intensity_radial += w * I_r
 
         # --- 2D stellar convolution ---
@@ -272,7 +286,7 @@ class OccultationEngine:
 # Backward-compatible wrapper
 # ───────────────────────────────────────────────────────────
 
-def compute_lightcurve_test(kbo, star, bandpass, grid, numerics, response=None):
+def compute_lightcurve(kbo, star, bandpass, grid, numerics, response=None):
     """
     Legacy interface (kept for convenience).
     """
