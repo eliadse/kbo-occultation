@@ -362,6 +362,24 @@ class Instrument():
                         self.total_telescope_transmission(wavelength)
         return tot_transmission
 
+    def total_transmission_filter(self, wavelength=None):
+        """
+        Combined transmission of the atmosphere, the telescope 
+        and the chosen filter
+                
+        Parameters
+        ----------
+        wavelength : 
+            Array of wavelengths in nm. 
+            If set to None, wavelength = np.arange(100, 1000, 1)
+        """
+        if wavelength is None:
+            wavelength = self.default_wavelengths
+        tot_transmission = self.atmospheric_transmission(wavelength) * \
+                        self.total_telescope_transmission(wavelength) * \
+                        self.optical_filter_transmission(wavelength)
+        return tot_transmission
+        
     def optical_filter_transmission(self, wavelength=None):
         """
         Compute the transmission of the chosen optical filter in the wavelength range
