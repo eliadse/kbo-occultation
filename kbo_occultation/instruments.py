@@ -1,5 +1,10 @@
 import numpy as np
+from astropy.io import ascii
+from astropy import units as u
+from scipy import interpolate
+
 from kbo_occultation import PACKAGE_DATA
+reference_files_path = PACKAGE_DATA
 
 def load_response_file(filename):
     """
