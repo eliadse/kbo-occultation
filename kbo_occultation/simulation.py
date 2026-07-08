@@ -204,6 +204,9 @@ class OccultationEngine:
         # --- spatial grid ---
         self.x_m = np.linspace(-grid.x_max_m, grid.x_max_m, grid.n_x)
 
+        # --- cached fresnel profiles --
+        self._fresnel_cache = {}
+
     def _compute_weights(self, response):
         spec_w = planck_photon(self.lambdas_nm * nm_m, self.temperature_K)
 
@@ -214,6 +217,32 @@ class OccultationEngine:
 
         weights = spec_w * response_vals
         return weights / weights.sum()
+
+    def _get_fresnel_profiles(self, R_m, D_m, r_grid_m):
+        """
+        Returns cached Fresnel profiles for all wavelengths.
+        """
+
+        key = (R_m, D_m, len(r_grid_m))
+
+        if key in self._fresnel_cache:
+            return self._fresnel_cache[key]
+
+        profiles = []
+
+        for lam in self.lambdas_nm * nm_m:
+            F = np.sqrt(lam * D_m / 2.0)
+            r = r_grid_m / F
+            rho = R_m / F
+            I_r = fresnel_point_intensity(r, rho, self.numerics.n_int)
+            
+            profiles.append(I_r)
+
+        profiles = np.array(profiles)  # shape (n_lambda, n_r)
+
+        self._fresnel_cache[key] = profiles
+
+        return profiles
 
     def set_response(self, response=None):
         """
@@ -264,18 +293,22 @@ class OccultationEngine:
         r_grid_m = np.linspace(0, r_max, self.numerics.n_r_grid)
 
         # --- polychromatic radial intensity ---
-        intensity_radial = np.zeros_like(r_grid_m)
+        #intensity_radial = np.zeros_like(r_grid_m)
 
-        for lam, w in zip(self.lambdas_nm * nm_m, self.weights):
-            if w < 1e-12:
-                # Skip this wavelength
-                continue
-            F = np.sqrt(lam * D_m / 2.0)
-            r = r_grid_m / F
-            rho = R_m / F
-            I_r = fresnel_point_intensity(r, rho, self.numerics.n_int)
-            #I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=self.numerics.n_int)
-            intensity_radial += w * I_r
+        #for lam, w in zip(self.lambdas_nm * nm_m, self.weights):
+        #    if w < 1e-12:
+        #        # Skip this wavelength
+        #        continue
+        #    F = np.sqrt(lam * D_m / 2.0)
+        #    r = r_grid_m / F
+        #    rho = R_m / F
+        #    I_r = fresnel_point_intensity(r, rho, self.numerics.n_int)
+        #    #I_r = fresnel_intensity_radial(r_grid_m, R_m, D_m, lam, n_int=self.numerics.n_int)
+        #    intensity_radial += w * I_r
+        profiles = self._get_fresnel_profiles(R_m, D_m, r_grid_m)
+
+        # Apply weights from transmission/filters etc. Weighted sum over wavelength axis
+        intensity_radial = np.tensordot(self.weights, profiles, axes=(0, 0))
 
         # --- 2D stellar convolution ---
         intensity = apply_stellar_disk_2d(self.x_m, intensity_radial, r_grid_m, r_star_m, b_m, self.numerics.n_star_side)
