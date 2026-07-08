@@ -256,6 +256,12 @@ class OccultationEngine:
         self.response = response
         self.weights = self._compute_weights(response)
 
+    def get_response(self):
+        """
+        Get the weights that the engine is currently using.
+        """
+        return self.lambdas_nm, self.weights
+
     def compute(self, kbo):
         """
         Compute occultation light curve for a given KBO.
