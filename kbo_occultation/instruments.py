@@ -4,7 +4,7 @@ from astropy import units as u
 from scipy import interpolate
 
 from kbo_occultation import PACKAGE_DATA
-reference_files_path = PACKAGE_DATA
+reference_files_path = "{}/iact_reference_values".format(PACKAGE_DATA)
 
 def load_response_file(filename):
     """
