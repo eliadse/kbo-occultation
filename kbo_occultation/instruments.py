@@ -406,6 +406,21 @@ class Instrument():
         result[mask] = f(wavelength[mask])
         return result/100.
 
+    def response_band(self, threshold=0.01, margin_nm=10.0, n_lambda=60):
+        """
+        Auto-detect the useful wavelength range for an instrument+filter
+        combo (where its total throughput is above `threshold` of its peak),
+        instead of guessing a bandpass by hand.
+        """
+        wl = self.default_wavelengths.astype(float)
+        resp = (self.total_transmission_filter(wl) if self.filter_type
+                else self.total_transmission(wl))
+        peak = resp.max()
+        above = wl[resp > threshold * peak]
+        lam_min = max(wl.min(), above.min() - margin_nm)
+        lam_max = min(wl.max(), above.max() + margin_nm)
+        return float(lam_min), float(lam_max), n_lambda
+
 # TODO Move the Vega stuff to physics instead. It doesn't make sense to calculate the photons
 #from Vega just using a filter and not the full instrument transmission, so fix that too 
     @staticmethod
@@ -427,8 +442,7 @@ class Instrument():
 
     def num_photons_from_mag(self, obs_times, mag):
         """
-            The number of photons for a given magnitude is interpolated
-            from the number of photons of Vega.
+            The number of photons for a given magnitude is interpolated from the number of photons of Vega.
             Functions are calculated from 100 to 1000nm
         """
         if self.filter_type is None:
@@ -436,8 +450,7 @@ class Instrument():
             photons_from_Vega = self.number_of_photons_from_Vega['QE']
 
         else:
-            filter_values = self.optical_filter_transmission() * \
-                        self.total_transmission()
+            filter_values = self.optical_filter_transmission() * self.total_transmission()
             photons_from_Vega = self.number_of_photons_from_Vega[self.filter_type]
 
         f = interpolate.interp1d(self.default_wavelengths, filter_values)
@@ -493,11 +506,9 @@ class Instrument():
 
     def signal_to_noise_ratio(self, magnitude, time_binning, ntels = 1):
         # Simple ratio of the photons detected from the star to the photons from the
-        # night sky background
-        # magnitude at a given filter
-        # times is the x axis of the diffraction pattern. Uniform sampling required!
+        # night sky background magnitude at a given filter for the time binning used. 
+        # Uniform sampling required!
         # relative_intensities is the y axis of the diffraction pattern, relative to 'magnitude'
-        # time_binning is the time that will be used for the data binning
         if not isinstance(time_binning, u.Quantity):
             raise Exception('Wrong input', 'Times needs to have units')
         num_star_photons = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
