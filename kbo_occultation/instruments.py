@@ -444,7 +444,8 @@ class Instrument():
         #integral = integrate.quad(f, np.min(self.default_wavelengths), np.max(self.default_wavelengths), limit=60)
         # The quad integration method struggles with functions that are flat and have steep
         # edges, so it's better to switch to trapz
-        integral = np.trapz(f.y,f.x)
+        trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy 2.0
+        integral = trapz(f.y, f.x)
         # 1e3 because going from ms to s
         # 1e4 because going from m2 to cm2
         # 10  because going from nm to A
