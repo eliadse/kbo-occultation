@@ -81,7 +81,7 @@ class LightCurve:
             time = reconstruct_time(len(data["std_chA"]), t0, sample_time / 1e9)
 
         lcs = {}
-        for ch in ["A", "B", "C", "D"]:
+        for ch in ["A", "B", "C"]:
             lcs[ch] = cls(time, data[f"std_ch{ch}"],
                           meta={"channel": ch, "source": filename})
         return lcs

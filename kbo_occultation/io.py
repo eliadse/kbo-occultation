@@ -57,6 +57,7 @@ def read_stat_binary_file(filename):
     with open(filename, 'rb') as f:
         chunk = np.fromfile(f, dtype=data_format)
         # These are the fields that will be stored in the output dictionary:
-        for field in ["std_chA", "std_chB", "std_chC", "std_chD", "time_stamp"]:
+        # The D channel is empty, so I don't save it
+        for field in ["std_chA", "std_chB", "std_chC", "time_stamp"]:
             output_data[field] = chunk[field]
     return output_data
