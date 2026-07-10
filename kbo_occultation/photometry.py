@@ -30,8 +30,8 @@ class LightCurve:
         # In the standard, the statistics of 2^18 digitizations are calculated
         # This corresponds to ~0.5ms (the DAQ digitizes at 500MSamples/s --> 2ns)
         # The fast one takes 2^17 digitizations, corresponding to ~0.1ms
-        #TODO Add the standard sampling and standard sample size to a config or something
-        # so that it's easy to know what I'm using. And use it from the config, not hard coded
+        #TODO use the sampling from the config, don't hard code
+        #TODO check that the units are correct 
         sample_time = sample_time * 2 # The 2 is for the 2ns
 
         #time = Time(np.array(data['time_stamp']) / 1.e6, format='unix', scale='utc')
