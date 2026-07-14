@@ -32,7 +32,10 @@ import astropy.units as u
 from kbo_occultation import GridConfig, NumericalConfig, BandpassConfig, run_parameter_sweep
 from kbo_occultation.config import standard_sampling, standard_sample_duration
 from kbo_occultation.instruments import Instrument
-from kbo_occultation.detectability import spatial_to_time, resample_to_cadence, sigma_from_instrument
+from kbo_occultation.detectability import (
+    spatial_to_time, resample_to_cadence, sigma_from_instrument,
+    spatial_power_spectrum, nyquist_frequency,
+)
 
 # ─── Keep in sync with magic_lst_filter_comparison.py ───────────────
 STAR_TEMPERATURE_K = 30000
@@ -58,6 +61,10 @@ numerics = NumericalConfig(n_r_grid=3000)
 
 # label -> {radius_m: (t_s, intensity)}, all at b=0, full spatial resolution
 curves = {}
+# label -> {radius_m: (x_m, intensity)}, same points, native spatial grid --
+# kept separately so the Nyquist-frequency analysis runs on x_m directly,
+# before spatial_to_time, rather than reconstructing it from t_s.
+spatial_curves = {}
 sigmas = {}
 
 for tel, filt in CONFIGS:
@@ -82,6 +89,7 @@ for tel, filt in CONFIGS:
     )
 
     sigmas[label] = sigma_from_instrument(inst, STAR_MAGNITUDE, SAMPLING_DT_S * u.s)
+    spatial_curves[label] = {p.radius_m: (p.x_m, p.intensity) for p in points}
     curves[label] = {
         p.radius_m: (spatial_to_time(p.x_m, SHADOW_VELOCITY_MPS), p.intensity)
         for p in points
@@ -103,12 +111,39 @@ fig1.suptitle("Noiseless diffraction light curves, b=0 (full spatial-grid resolu
 fig1.tight_layout()
 fig1.savefig("lightcurves_noiseless.png", dpi=200)
 
+# ─── Figure 1b: power spectrum of each curve, with Nyquist frequency ────
+# Computed on the native spatial grid x_m (spatial_curves), i.e. *before*
+# spatial_to_time/resample_to_cadence -- resampling can only remove
+# high-frequency content, never add it back, so measuring bandwidth after
+# resampling would just report the cadence already chosen instead of what
+# the physics needs.
+fig1b, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
+for ax, (label, per_radius) in zip(axes.flat, spatial_curves.items()):
+    for radius_m, (x_m, I) in sorted(per_radius.items()):
+        freq_cyc_per_m, power = spatial_power_spectrum(x_m, I)
+        f_nyq_hz, dt_max_s = nyquist_frequency(x_m, I, SHADOW_VELOCITY_MPS)
+        freq_hz = freq_cyc_per_m * SHADOW_VELOCITY_MPS
+
+        line, = ax.plot(freq_hz, power, label=f"R={radius_m} m", lw=1.2)
+        ax.axvline(f_nyq_hz, color=line.get_color(), ls="--", lw=1.0, alpha=0.7)
+        print(f"{label:16s} R={radius_m:4d}m  f_nyquist={f_nyq_hz:8.1f} Hz  "
+              f"dt_max={dt_max_s*1e3:7.3f} ms  (using dt={SAMPLING_DT_S*1e3:.3f} ms)")
+
+    ax.set_yscale("log")
+    ax.set_xlim(0, 3 * f_nyq_hz)
+    ax.set_title(label)
+    ax.set_xlabel("Temporal frequency (Hz)")
+    ax.set_ylabel("Normalised power")
+    ax.legend(fontsize=7)
+    ax.grid(alpha=0.3)
+fig1b.suptitle("Power spectrum of the diffraction pattern (dashed = estimated Nyquist frequency)")
+fig1b.tight_layout()
+fig1b.savefig("lightcurves_power_spectrum.png", dpi=200)
+
 # ─── Figure 1: noiseless curves, all radii, one panel per config ────
 fig1, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True, sharey=True)
 for ax, (label, per_radius) in zip(axes.flat, curves.items()):
     for radius_m, (t_s, I) in sorted(per_radius.items()):
-        # TODO add the fourier transform to plot and then get the Nyquist frequency
-        # TODO I think I should get the frequency before doing the "spatial_to_time"
         ax.plot(t_s * 1e3, I, label=f"R={radius_m} m", lw=1.2)
     ax.set_title(label)
     ax.set_xlabel("Time (ms)")
