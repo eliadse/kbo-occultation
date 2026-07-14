@@ -28,6 +28,78 @@ def spatial_to_time(x_m: np.ndarray, shadow_velocity_mps: float) -> np.ndarray:
     return np.asarray(x_m) / shadow_velocity_mps
 
 
+def spatial_power_spectrum(x_m: np.ndarray, intensity: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Power spectrum of a diffraction pattern I(x), evaluated on its native
+    uniform spatial grid.
+
+    Returns
+    -------
+    freq_cyc_per_m : ndarray
+        Non-negative spatial frequencies (cycles/m).
+    power : ndarray
+        Power spectral density, normalised so its peak is 1.
+    """
+    x_m = np.asarray(x_m)
+    dx = x_m[1] - x_m[0]
+
+    signal = intensity - np.mean(intensity)
+    spectrum = np.abs(np.fft.rfft(signal)) ** 2
+    freq_cyc_per_m = np.fft.rfftfreq(len(x_m), d=dx)
+
+    return freq_cyc_per_m, spectrum / spectrum.max()
+
+
+def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mps: float,
+                       power_threshold: float = 0.99) -> Tuple[float, float]:
+    """
+    Estimate the Nyquist sampling frequency needed to resolve a simulated
+    diffraction light curve, from the pattern's own spatial frequency
+    content -- rather than assuming the Fresnel scale alone sets it.
+
+    Must be called on the *spatial* pattern I(x_m), on its native uniform
+    grid, before any resampling to a fixed time cadence (resample_to_cadence
+    can only remove high-frequency content, never add it back, so measuring
+    bandwidth after resampling just tells you the cadence you already
+    chose, not what the physics needs).
+
+    The pattern's spatial bandwidth (highest spatial frequency f_x with
+    power above `power_threshold` of the peak) is converted to a temporal
+    frequency via f_t = f_x * shadow_velocity_mps, since x = v*t for a
+    shadow crossing the observer at constant velocity.
+
+    Parameters
+    ----------
+    x_m : array_like
+        Uniform spatial grid (m).
+    intensity : array_like
+        Noiseless diffraction pattern I(x_m).
+    shadow_velocity_mps : float
+        KBO shadow velocity across the observer's location (m/s).
+    power_threshold : float
+        Fraction of peak spectral power above which a spatial frequency
+        counts as "present" in the signal. Default 1%.
+
+    Returns
+    -------
+    f_nyquist_hz : float
+        Highest temporal frequency present in the pattern. Sample at
+        >= 2 * f_nyquist_hz to avoid aliasing (in practice, use a few x
+        margin -- power_threshold is a soft cutoff, not a hard band limit).
+    dt_max_s : float
+        Corresponding maximum sampling interval, 1 / (2 * f_nyquist_hz).
+    """
+    freq_cyc_per_m, power = spatial_power_spectrum(x_m, intensity)
+    cumulative = np.cumsum(power) / np.sum(power)
+    above = freq_cyc_per_m[cumulative > power_threshold]
+    f_max_spatial = float(above[0]) if above.size else 0.0
+
+    f_nyquist_hz = f_max_spatial * shadow_velocity_mps
+    dt_max_s = 1.0 / (2.0 * f_nyquist_hz) if f_nyquist_hz > 0 else np.inf
+
+    return f_nyquist_hz, dt_max_s
+
+
 def resample_to_cadence(t_s: np.ndarray, intensity: np.ndarray, dt_s: float) -> Tuple[np.ndarray, np.ndarray]:
     """
     Resample a light curve onto a fixed sampling cadence dt_s (e.g. an
