@@ -24,15 +24,15 @@ from kbo_occultation.detectability import (
 
 STAR_TEMPERATURE_K = 30000
 SHADOW_VELOCITY_MPS = 25e3
-STAR_ANGULAR_RADIUS_MAS = 0.03
+STAR_ANGULAR_RADIUS_MAS = 0.02
 DISTANCE_AU = 40.0
-RADII_M = [50, 100, 200, 500]
+RADII_M = [20, 50, 100, 200]
 THRESHOLD = 0.99
 
 BAND = BandpassConfig(lam_min_nm=400, lam_max_nm=500, n_lambda=41)
 
-grid = GridConfig(x_max_m=6000, n_x=100)
-numerics = NumericalConfig(n_r_grid=2000)
+grid = GridConfig(x_max_m=30000, n_x=4800)
+numerics = NumericalConfig(n_r_grid=5000)
 
 # Fresnel scale F = sqrt(lambda * D / 2), evaluated at the passband's mean
 # wavelength -- used only to put a second, achromatic-ish set of axes

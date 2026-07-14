@@ -32,3 +32,4 @@ class NumericalConfig:
 
 standard_sampling = 2**18
 standard_sample_duration = 2 #ns
+lightcurve_sampling = 50 # [Hz]. 2 * Nyquist freq. From plot_diffraction_psd with r_* = 0.03mas
