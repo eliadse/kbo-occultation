@@ -31,9 +31,27 @@ from .sweep import (
 
 from .detectability import (
     spatial_to_time,
+    spatial_power_spectrum,
+    nyquist_frequency,
     resample_to_cadence,
+    bin_average,
     peak_snr,
     matched_filter_snr,
     event_duration,
     is_detectable,
+)
+
+from .injection import (
+    InjectionResult,
+    inject_occultation,
+    random_injection_time,
+)
+
+from .matched_filter import (
+    MatchedFilterResult,
+    Candidate,
+    robust_sigma,
+    sliding_matched_filter_snr,
+    shape_veto_chi2,
+    find_candidates,
 )

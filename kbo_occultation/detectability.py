@@ -111,6 +111,50 @@ def resample_to_cadence(t_s: np.ndarray, intensity: np.ndarray, dt_s: float) -> 
     return t_new, I_new
 
 
+def bin_average(t_s: np.ndarray, signal: np.ndarray, n_samples: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Bin a *noisy* light curve by averaging non-overlapping chunks of
+    n_samples raw points (any leftover points that don't fill a final
+    chunk are dropped) -- unlike resample_to_cadence's interpolation,
+    this actually reduces per-sample noise (by sqrt(n_samples), to the
+    extent the noise is white on the timescale being binned) and cuts
+    the number of independent samples a downstream search has to try,
+    which is the point when raw cadence is much finer than the features
+    you're actually looking for.
+
+    Use nyquist_frequency on the noiseless template to find how coarse
+    you can safely go without smearing out the feature itself (its
+    dt_max_s), rather than picking n_samples by guesswork.
+
+    Parameters
+    ----------
+    t_s, signal : array_like
+        Uniformly-sampled light curve.
+    n_samples : int
+        Number of consecutive raw samples averaged into each output
+        point.
+
+    Returns
+    -------
+    t_binned, signal_binned, sigma_binned : ndarray
+        sigma_binned is the standard error of the mean within each bin
+        (``std(chunk) / sqrt(n_samples)``) -- an empirical, per-bin
+        noise estimate.
+    """
+    t_s = np.asarray(t_s)
+    signal = np.asarray(signal)
+
+    n_trim = len(signal) - (len(signal) % n_samples)
+    t_chunks = t_s[:n_trim].reshape(-1, n_samples)
+    signal_chunks = signal[:n_trim].reshape(-1, n_samples)
+
+    t_binned = t_chunks.mean(axis=1)
+    signal_binned = signal_chunks.mean(axis=1)
+    sigma_binned = signal_chunks.std(axis=1) / np.sqrt(n_samples)
+
+    return t_binned, signal_binned, sigma_binned
+
+
 def peak_snr(intensity: np.ndarray, sigma: float) -> float:
     """
     Simplest detectability statistic: the deepest single-sample dip,
