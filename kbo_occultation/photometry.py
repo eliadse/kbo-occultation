@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 
 from kbo_occultation import PACKAGE_DATA
 from kbo_occultation.io import read_stat_binary_file
+from kbo_occultation.filtering import highpass_fft
 
 class LightCurve:
     def __init__(self, time, signal, meta=None):
@@ -58,7 +59,7 @@ class LightCurve:
 
         # --- filtering ---
         if low_freq_cut is not None:
-            signal = low_frequency_cut(signal, fs, low_freq_cut)
+            signal = highpass_fft(signal, fs, low_freq_cut)
 
         return cls(time, signal, meta={
             "channel": channel,
@@ -134,25 +135,6 @@ def average_chunks(x, n):
         return x
     return np.mean(x[:len(x)//n*n].reshape(-1, n), axis=1)
 
-
-def low_frequency_cut(y_values, frequency_cut):
-        from scipy.fftpack import fftfreq, irfft, rfft
-        dt = sample_time.to('s').value
-        w = fftfreq(y_values.size, d=dt)
-        f_signal = rfft(y_values)
-        cut_f_signal = f_signal.copy()
-        # cut signal below frequency_cut
-        cut_f_signal[(np.abs(w) < frequency_cut)] = 0
-        cs = irfft(cut_f_signal)
-        return cs
-
-#minimalistic
-def low_frequency_cut(y, fs, fcut):
-    freqs = np.fft.rfftfreq(len(y), d=1/fs)
-    fft = np.fft.rfft(y)
-
-    fft[np.abs(freqs) < fcut] = 0
-    return np.fft.irfft(fft, n=len(y))
 
 #def load_star_info()
 

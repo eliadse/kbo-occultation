@@ -55,3 +55,20 @@ from .matched_filter import (
     shape_veto_chi2,
     find_candidates,
 )
+
+from .dc_combine import (
+    load_dc_series,
+    interpolate_dc_to_fast,
+    combine_fast_and_dc,
+    combine_lightcurve_with_dc,
+    smooth_dc_series,
+    detrend_lightcurve_with_dc,
+    flag_dc_excursions,
+    despike_lightcurve_with_dc,
+)
+
+from .filtering import (
+    highpass_fft,
+    highpass_butterworth,
+    highpass_lightcurve,
+)
