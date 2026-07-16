@@ -93,6 +93,31 @@ def combine_fast_and_dc(time_s: np.ndarray, fast_signal: np.ndarray, dc_on_fast:
     signal's. Both are mean-normalised before combining, and the result is
     re-scaled back to the DC's absolute level.
 
+    Caution -- this is a hard, bin-wise spectral swap (equivalent to
+    filtering.highpass_fft's brick-wall cutoff applied to the fast signal,
+    summed with an equally brick-wall low-pass of the DC series), not a
+    smooth rolloff like filtering.highpass_butterworth. As that module's
+    own docstring notes, a brick-wall cutoff can ring in the time domain
+    around sharp features -- and an injection-recovery test
+    (kbo_occultation.injection_batch.run_injection_monte_carlo, see
+    examples/injection_montecarlo_2025_12_16.py) confirmed this matters in
+    practice: for a real KBO occultation template whose own timescale
+    (~0.3s here) is only ~3x this function's default cutoff period (1s),
+    the combined signal's fine structure can diverge enough from the raw
+    template's that a shape-consistency check
+    (matched_filter.shape_veto_chi2) rejects a genuine, high-SNR event
+    (measured directly: SNR~165 but chi2/dof~18 for one R=300m trial).
+    Rebuilding the comparison template by running this same function on a
+    flat reference (matched_filter/injection_batch's approach for a true
+    LTI filter like highpass) only partly compensates (chi2/dof dropped to
+    ~5, still short of passing) with a few seconds of context on each side
+    -- consistent with the ringing extending further than that, unlike the
+    fast-decaying, near-local response of a Butterworth filter. Net effect:
+    this correction can distort real event shape for occultations whose
+    duration approaches 1/frequency_cut_hz, in a way that's harder to
+    correct for in a matched-filter search than highpass's cleaner,
+    faster-decaying distortion is.
+
     Parameters
     ----------
     time_s : array_like
@@ -156,7 +181,9 @@ def combine_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, frequency_cu
     """
     End-to-end convenience: load a DC report, interpolate it onto `lc`'s
     time grid, and return a new LightCurve whose signal is the frequency-
-    domain hybrid from combine_fast_and_dc.
+    domain hybrid from combine_fast_and_dc -- see that function's
+    docstring for a real, measured caveat about brick-wall ringing
+    distorting occultation shape for a matched-filter search.
 
     Parameters
     ----------
