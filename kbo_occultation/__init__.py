@@ -51,9 +51,19 @@ from .matched_filter import (
     MatchedFilterResult,
     Candidate,
     robust_sigma,
+    compute_baseline_and_sigma,
     sliding_matched_filter_snr,
     shape_veto_chi2,
     find_candidates,
+)
+
+from .injection_batch import (
+    TrialResult,
+    MethodNoiseProfile,
+    build_search_template,
+    run_injection_monte_carlo,
+    to_records as batch_to_records,
+    to_dataframe as batch_to_dataframe,
 )
 
 from .dc_combine import (
