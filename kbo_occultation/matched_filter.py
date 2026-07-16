@@ -12,7 +12,7 @@ with no assumption about where (or whether) an event is.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy.ndimage import median_filter
@@ -52,9 +52,51 @@ def robust_sigma(x: np.ndarray) -> float:
     return float(1.4826 * np.median(np.abs(x - np.median(x))))
 
 
+def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_duration_s: float,
+                                detrend_window_s: Optional[float] = None) -> Tuple[np.ndarray, float]:
+    """
+    Rolling-median baseline (scipy.ndimage.median_filter) and the
+    resulting residual's robust_sigma, factored out of
+    sliding_matched_filter_snr so it can be computed once and reused
+    (e.g. injection_batch.py caches this per noise-reduction method
+    instead of recomputing it -- by far the most expensive step here --
+    for every trial).
+
+    Parameters
+    ----------
+    time, signal : array_like
+        Light curve, on a uniform time grid.
+    template_duration_s : float
+        Used only to set the default detrend_window_s (20x this).
+    detrend_window_s : float, optional
+        Width of the rolling-median baseline. Defaults to 20x
+        template_duration_s, wide enough to not distort the event
+        itself.
+
+    Returns
+    -------
+    baseline : ndarray, same shape as signal.
+    sigma : float, robust_sigma of (signal/baseline - 1).
+    """
+    time = np.asarray(time)
+    signal = np.asarray(signal)
+    dt = float(np.median(np.diff(time)))
+
+    if detrend_window_s is None:
+        detrend_window_s = 20.0 * template_duration_s
+    M = int(round(template_duration_s / dt))
+    window_samples = max(int(round(detrend_window_s / dt)), M)
+    baseline = median_filter(signal, size=window_samples, mode="reflect")
+    sigma = robust_sigma(signal / baseline - 1.0)
+
+    return baseline, sigma
+
+
 def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
                                 template_time: np.ndarray, template_intensity: np.ndarray,
-                                detrend_window_s: Optional[float] = None) -> MatchedFilterResult:
+                                detrend_window_s: Optional[float] = None,
+                                baseline: Optional[np.ndarray] = None,
+                                sigma: Optional[float] = None) -> MatchedFilterResult:
     """
     Slide (template_time, template_intensity) -- a noiseless simulated
     diffraction pattern already converted to time, e.g. via
@@ -74,7 +116,14 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         to strip slow drifts (elevation, clouds) without needing to
         know the event scale ahead of time. Defaults to 20x the
         template's duration, wide enough to not distort the event
-        itself.
+        itself. Ignored if `baseline`/`sigma` are both given.
+    baseline, sigma : optional
+        Precomputed compute_baseline_and_sigma(...) output, to skip
+        recomputing the rolling-median baseline (the expensive step --
+        the FFT correlate and per-candidate chi2 veto are cheap by
+        comparison). `baseline` must be the same length as `signal`.
+        If omitted (the default), both are computed fresh here exactly
+        as before -- every existing caller is unaffected.
 
     Returns
     -------
@@ -94,10 +143,8 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
     M = len(template_resampled)
 
     # --- detrend: rolling-median baseline, then normalise ---
-    if detrend_window_s is None:
-        detrend_window_s = 20.0 * template_duration_s
-    window_samples = max(int(round(detrend_window_s / dt)), M)
-    baseline = median_filter(signal, size=window_samples, mode="reflect")
+    if baseline is None or sigma is None:
+        baseline, sigma = compute_baseline_and_sigma(time, signal, template_duration_s, detrend_window_s)
     norm_signal = signal / baseline
 
     # --- matched filter: FFT cross-correlation of the residuals ---
@@ -107,7 +154,6 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
 
     correlation = correlate(residual_data, residual_template, mode="valid", method="fft")
 
-    sigma = robust_sigma(residual_data)
     snr = correlation / (template_norm * sigma)
 
     # correlation[i] is the match for the window signal[i:i+M]; tag it
