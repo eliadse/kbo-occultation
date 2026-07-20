@@ -1,18 +1,25 @@
 [project]
 name = "kbo-occultation"
-version = "0.1.0"
+version = "0.2.0"
 description = "Simulation of KBO stellar occultation diffraction patterns"
 authors = [{name="eliadse"}]
 dependencies = [
     "numpy",
     "matplotlib",
     "scipy",
-    "astropy"
+    "astropy",
+    "pandas"
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
-"kbo_occultation.data" = ["*.txt"]
+"kbo_occultation.data" = ["**/*.txt", "**/*.dat", "**/*.fits", "**/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]

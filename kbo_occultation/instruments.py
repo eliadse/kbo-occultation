@@ -1,3 +1,6 @@
+"""
+Functions and reference files created and compiled by Tarek Hassan
+"""
 import numpy as np
 from astropy.io import ascii
 from astropy import units as u
