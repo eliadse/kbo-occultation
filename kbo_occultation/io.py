@@ -1,3 +1,4 @@
+""" Function to read the binary file from Tarek Hassan """
 import numpy as np
 
 def read_stat_binary_file(filename):

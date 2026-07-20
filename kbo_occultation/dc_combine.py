@@ -87,6 +87,7 @@ def interpolate_dc_to_fast(fast_time_s: np.ndarray, dc_time_s: np.ndarray, dc_va
 def combine_fast_and_dc(time_s: np.ndarray, fast_signal: np.ndarray, dc_on_fast: np.ndarray,
                          frequency_cut_hz: float, return_spectra: bool = False):
     """
+    Function modified from magic_spysii combine_dc
     Frequency-domain hybrid of a fast signal and a slow DC series already
     resampled onto the same uniform time grid: below frequency_cut_hz, use
     the DC report's own spectral content; at and above it, use the fast
@@ -314,6 +315,23 @@ def flag_dc_excursions(dc_time_s: np.ndarray, dc_value: np.ndarray, baseline_win
     return np.abs(residual) > threshold_sigma * sigma
 
 
+def mask_near_times(time_s: np.ndarray, flagged_times_s: np.ndarray, pad_s: float) -> np.ndarray:
+    """
+    Boolean mask of the samples in ``time_s`` within +-pad_s of any of
+    the ``flagged_times_s``. Uses the distance to the nearest flagged
+    time via searchsorted -- O((n + n_flagged) log n_flagged) instead of
+    one full-length mask per flagged time.
+    """
+    time_s = np.asarray(time_s)
+    bad_t = np.sort(np.asarray(flagged_times_s))
+    if not bad_t.size:
+        return np.zeros(len(time_s), dtype=bool)
+    idx = np.searchsorted(bad_t, time_s)
+    d_prev = np.where(idx > 0, time_s - bad_t[np.maximum(idx - 1, 0)], np.inf)
+    d_next = np.where(idx < bad_t.size, bad_t[np.minimum(idx, bad_t.size - 1)] - time_s, np.inf)
+    return np.minimum(d_prev, d_next) <= pad_s
+
+
 def despike_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, telescope: str = "m2", pixel: int = 0,
                                 baseline_window_s: float = 60.0, threshold_sigma: float = 4.0,
                                 pad_s: float = 1.0, fill: str = "remove") -> Tuple[LightCurve, float]:
@@ -370,9 +388,7 @@ def despike_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, telescope: s
 
     bad_dc = flag_dc_excursions(dc_time_s, dc_value, baseline_window_s, threshold_sigma)
 
-    fast_bad = np.zeros(len(lc.time), dtype=bool)
-    for t in dc_time_s[bad_dc]:
-        fast_bad |= (lc.time >= t - pad_s) & (lc.time <= t + pad_s)
+    fast_bad = mask_near_times(lc.time, dc_time_s[bad_dc], pad_s)
 
     bad_fraction = float(np.mean(fast_bad))
 
