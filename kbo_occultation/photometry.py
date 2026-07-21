@@ -6,8 +6,25 @@ import matplotlib.pyplot as plt
 #from astropy.time import Time
 
 from kbo_occultation import PACKAGE_DATA
+from kbo_occultation import config
 from kbo_occultation.io import read_stat_binary_file
 from kbo_occultation.filtering import highpass_fft
+
+
+def _channel_signal(data, channel, statistic):
+    """
+    Extract the flux proxy for one channel from a stat-binary record array. 
+    ``"variance"`` (std**2) is proportional to photon flux for shot-noise-dominated 
+    AC-coupled PMT signals and is what the multiplicative injection model assumes; 
+    ``"std"`` keeps the raw recorded standard deviation.
+    """
+    std = data[f"std_ch{channel}"]
+    if statistic == "variance":
+        return std ** 2
+    if statistic == "std":
+        return std
+    raise ValueError(f"statistic must be 'variance' or 'std', got {statistic!r}")
+
 
 class LightCurve:
     def __init__(self, time, signal, meta=None):
@@ -21,41 +38,39 @@ class LightCurve:
                      channel,
                      average=None,
                      low_freq_cut=None,
-                     fs=None,
                      time_mode="fixed",
-                     sample_time=262144):
-       
+                     sample_time=config.standard_sampling,
+                     statistic="variance"):
+        """
+        Load one channel from a stat binary file.
+
+        - sample_time: The number of DAQ digitizations per statistics record (2**18 in the standard mode); 
+        each digitization lasts ``config.standard_sample_duration`` ns, so the record cadence is 
+        sample_time * standard_sample_duration ns (~0.5 ms for standard files). 
+        - statistic: Selects the flux proxy stored in ``signal`` ("variance" = std**2, "std" = raw std).
+        """
+        if sample_time is None:
+            raise ValueError("A sampling interval (in digitizations) must be provided")
+
         # Use the binary file function to read an observation file
         data = read_stat_binary_file(filename)
 
-        # In the standard, the statistics of 2^18 digitizations are calculated
-        # This corresponds to ~0.5ms (the DAQ digitizes at 500MSamples/s --> 2ns)
-        # The fast one takes 2^17 digitizations, corresponding to ~0.1ms
-        #TODO use the sampling from the config, don't hard code
-        #TODO check that the units are correct 
-        sample_time = sample_time * 2 # The 2 is for the 2ns
-
-        #time = Time(np.array(data['time_stamp']) / 1.e6, format='unix', scale='utc')
         time = data["time_stamp"].astype(float) / 1.e6 # Now it's in seconds
         t0 = time[0]
-        print("t0 = ", t_0)
-        #time -= t0
-        dt = sample_time / 1e9
-        fs = 1/dt
-        
-        signal = data[f"std_ch{channel}"]**2
-        
+        dt = sample_time * config.standard_sample_duration / 1e9
+        fs = 1 / dt
+
+        signal = _channel_signal(data, channel, statistic)
+
         # The time stamps are not reliable, so we re-write them.
         if time_mode == "fixed":
-            if sample_time is None:
-                raise ValueError("A sampling interval must be provided when fixed_time=True")
-
             time = reconstruct_time(len(signal), t0, dt)
-        
+
         # --- averaging ---
         if average is not None and average > 1:
             signal = average_chunks(signal, average)
             time = average_chunks(time, average)
+            fs = fs / average
 
         # --- filtering ---
         if low_freq_cut is not None:
@@ -63,28 +78,35 @@ class LightCurve:
 
         return cls(time, signal, meta={
             "channel": channel,
-            "source": filename
+            "source": filename,
+            "statistic": statistic,
         })
 
     @classmethod
-    def from_stat_binary_all(cls, filename, time_mode="fixed", sample_time=262144):
+    def from_stat_binary_all(cls, filename, time_mode="fixed",
+                             sample_time=config.standard_sampling,
+                             statistic="variance"):
+        """
+        Load all channels (A, B, C) from a stat binary file as a dict of LightCurves. 
+        Same conventions as ``from_stat_binary``; the flux proxy defaults to the variance (std**2).
+        """
+        if sample_time is None:
+            raise ValueError("A sampling interval (in digitizations) must be provided")
+
         data = read_stat_binary_file(filename)
         time = data["time_stamp"].astype(float) / 1e6
         t0 = time[0]
-
-        sample_time = sample_time * 2 # The 2 is for the 2ns
+        dt = sample_time * config.standard_sample_duration / 1e9
 
         # The time stamps are not reliable, so we re-write them.
         if time_mode == "fixed":
-            if sample_time is None:
-                raise ValueError("A sampling interval must be provided when fixed_time=True")
-
-            time = reconstruct_time(len(data["std_chA"]), t0, sample_time / 1e9)
+            time = reconstruct_time(len(data["std_chA"]), t0, dt)
 
         lcs = {}
         for ch in ["A", "B", "C"]:
-            lcs[ch] = cls(time, data[f"std_ch{ch}"],
-                          meta={"channel": ch, "source": filename})
+            lcs[ch] = cls(time, _channel_signal(data, ch, statistic),
+                          meta={"channel": ch, "source": filename,
+                                "statistic": statistic})
         return lcs
     
     def plot(self, ax=None, **kwargs):
@@ -120,40 +142,12 @@ def plot_lightcurves(lightcurves, labels=None, ax=None):
 
 # TODO Add a function to set the name and magnitude of the star. Maybe its size too
 
-    def average_chunks(x, y, n_samples):
-        # Take the array, remove the last points which go over lenx/n_samples
-        # Reshape the array so that rows contain n_samples columns.
-        # Take the average of the rows.
-        averaged_x = np.average(x[0:-(len(x)%n_samples)].reshape(-1, n_samples), axis=1)
-        averaged_y = np.average(y[0:-(len(y)%n_samples)].reshape(-1, n_samples), axis=1)
-        error_y = np.std(y[0:-(len(y)%n_samples)].reshape(-1, n_samples), axis=1)/np.sqrt(n_samples)
-        return averaged_x, averaged_y, error_y
-
-#minimalistic
 def average_chunks(x, n):
+    """
+    Trim x to a multiple of n and average non-overlapping blocks of n.
+    See also detectability.bin_average, which does the same block
+    averaging on a (time, signal) pair and propagates sigma.
+    """
     if n <= 1:
         return x
     return np.mean(x[:len(x)//n*n].reshape(-1, n), axis=1)
-
-
-#def load_star_info()
-
-def plot_test_stars(data_dict):
-    fig = plt.figure(figsize=[12,7])
-    #for star in data_dict:
-    for star in mag_dict:
-        data = data_dict[star][0]
-        # mask for outliers
-        #mask = data < (np.mean(data) + 4* np.std(data))
-        # For tests
-        #plt.scatter(data_dict[star][1], data, marker=".", label=f'{star}', alpha=0.7)
-        plt.scatter(data_dict[star][1], data, marker=".", label=f'{star}, Mag(B): {mag_dict[star]}', alpha=0.7)
-        print(star, np.mean(data))
-
-    plt.legend(loc="lower right")
-    plt.xlabel("Time [s]")
-    plt.ylabel(r"std_dev$^2$")
-    plt.title('Fast photometry of test stars with MAGIC-II')
-    plt.tight_layout()
-    #plt.savefig(f'{data_path}/All_together.png')
-    plt.show()
