@@ -488,6 +488,7 @@ def run_array_injection_monte_carlo(
     snr_threshold: float = 5.0,
     max_chi2_reduced: float = 2.0,
     min_ntel: int = 2,
+    max_pairwise_dt_s: Optional[float] = None,
     seed: int = 0,
     checkpoint_path: Optional[str] = None,
     template_pad_s: Optional[float] = None,
@@ -522,6 +523,10 @@ def run_array_injection_monte_carlo(
     min_ntel : int
         Channels that must recover the injection, within the
         coincidence tolerance, for coincidence_recovered.
+    max_pairwise_dt_s : float, optional
+        Extra cut on the total span of the recovered channels' times
+        (see coincidence.match_coincidences). None uses only the
+        single-linkage tolerance.
 
     Returns
     -------
@@ -707,7 +712,8 @@ def run_array_injection_monte_carlo(
                         snr_per_channel[ch] = np.nan
                         recovered_per_channel[ch] = False
 
-                events = match_coincidences(recovered_candidates, tolerance_s, min_ntel=min_ntel)
+                events = match_coincidences(recovered_candidates, tolerance_s, min_ntel=min_ntel,
+                                            max_pairwise_dt_s=max_pairwise_dt_s)
                 coincidence_recovered = len(events) > 0
                 combined_snr = events[0].combined_snr if coincidence_recovered else np.nan
 
