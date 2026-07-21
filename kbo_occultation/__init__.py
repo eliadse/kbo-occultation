@@ -20,6 +20,9 @@ from .config import (
     BandpassConfig,
     GridConfig,
     NumericalConfig,
+    TelescopeConfig,
+    ArrayConfig,
+    ORM_ARRAY,
 )
 
 from .sweep import (
@@ -60,10 +63,44 @@ from .matched_filter import (
 from .injection_batch import (
     TrialResult,
     MethodNoiseProfile,
+    ArrayTrialResult,
     build_search_template,
     run_injection_monte_carlo,
+    run_array_injection_monte_carlo,
+    efficiency_curve,
     to_records as batch_to_records,
     to_dataframe as batch_to_dataframe,
+)
+
+from .kinematics import (
+    ShadowKinematics,
+    shadow_velocity_opposition,
+    shadow_velocity_from_target,
+)
+
+from .coincidence import (
+    TelescopeSearchResult,
+    CoincidenceEvent,
+    AccidentalRateResult,
+    coincidence_tolerance_s,
+    match_coincidences,
+    accidental_coincidence_rate,
+)
+
+from .upper_limits import (
+    EfficiencyCurve,
+    SurveyExposure,
+    UpperLimitResult,
+    fresnel_scale_m,
+    effective_shadow_width_m,
+    poisson_upper_limit,
+    exposure_omega_deg2,
+    cumulative_density_upper_limit,
+)
+
+from .search import (
+    ObservationSearchResult,
+    search_observation,
 )
 
 from .dc_combine import (
