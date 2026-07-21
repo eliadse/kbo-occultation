@@ -129,9 +129,8 @@ def shadow_velocity_from_target(star_coord, obs_time, distance_au: float,
 
     direction_enu = None
     if location is not None and v_rel > 0:
-        # Express the drift direction in the local ENU frame by treating
-        # it as a direction on the sky (directions transform like
-        # positions at infinity).
+        # Express the drift direction in the local ENU frame by treating it as a 
+        # direction on the sky (directions transform like positions at infinity).
         d_icrs = SkyCoord(CartesianRepresentation(*(v_rel_vec / v_rel)), frame="icrs")
         altaz = d_icrs.transform_to(AltAz(obstime=obs_time, location=location))
         alt = altaz.alt.rad
