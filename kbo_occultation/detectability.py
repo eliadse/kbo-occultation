@@ -63,10 +63,11 @@ def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mp
     bandwidth after resampling just tells you the cadence you already
     chose, not what the physics needs).
 
-    The pattern's spatial bandwidth (highest spatial frequency f_x with
-    power above `power_threshold` of the peak) is converted to a temporal
-    frequency via f_t = f_x * shadow_velocity_mps, since x = v*t for a
-    shadow crossing the observer at constant velocity.
+    The pattern's spatial bandwidth (the spatial frequency f_x below
+    which a fraction `power_threshold` of the cumulative spectral power
+    is contained) is converted to a temporal frequency via
+    f_t = f_x * shadow_velocity_mps, since x = v*t for a shadow crossing
+    the observer at constant velocity.
 
     Parameters
     ----------
@@ -77,8 +78,8 @@ def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mp
     shadow_velocity_mps : float
         KBO shadow velocity across the observer's location (m/s).
     power_threshold : float
-        Fraction of peak spectral power above which a spatial frequency
-        counts as "present" in the signal. Default 1%.
+        Fraction of the cumulative spectral power that must be contained
+        below the reported bandwidth. Default 0.99 (99% of the power).
 
     Returns
     -------

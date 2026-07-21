@@ -104,7 +104,10 @@ def inject_occultation(time: np.ndarray, signal: np.ndarray, x_m: np.ndarray, in
         t0_s = random_injection_time(time, x_m, shadow_velocity_mps, rng=rng)
 
     t_template = spatial_to_time(x_m, shadow_velocity_mps) + t0_s
+    # Interpolate in float64, then match the data's dtype so a float32
+    # light curve stays float32 downstream (halves per-trial memory).
     template = np.interp(time, t_template, intensity, left=1.0, right=1.0)
+    template = template.astype(signal.dtype, copy=False)
 
     injected_signal = signal * template
 
