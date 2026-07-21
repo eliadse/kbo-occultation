@@ -1,38 +1,34 @@
 # examples/injection_montecarlo_2025_12_16.py
 """
-Monte Carlo extension of injection_snr_comparison_2025_12_16.py: instead of
-one KBO radius and one random injection time, sweep RADII_M x
-N_TRIALS_PER_RADIUS random t0s (same shared t0 list reused across every
-radius and method, so comparisons stay paired) for each of the 6
-noise-reduction variants, and look at the resulting SNR/recovery-rate
-distributions instead of one noisy point estimate.
+Monte Carlo extension of injection_snr_comparison_2025_12_16.py: instead of one 
+KBO radius and one random injection time, sweep RADII_M x N_TRIALS_PER_RADIUS 
+random t0s (same shared t0 list reused across every radius and method, so 
+comparisons stay paired) for each of the 6 noise-reduction variants, and look at 
+the resulting SNR/recovery-rate distributions instead of one noisy point estimate.
 
-The single-injection script's result was inconclusive on its own: recovered
-SNR didn't track each method's known noise quality at all (dc_fft_swap,
-independently known to have a *worse* noise floor, scored higher than
-highpass, which has the best) -- a single-realization artifact. The one
-credible finding was in false-alarm counts (a whole-series statistic, not
-tied to one instant): highpass cut them ~9x, the DC-based corrections
-didn't. This script gets proper statistics on both.
+The single-injection script's result was inconclusive on its own: recovered SNR 
+didn't track each method's known noise quality at all (dc_fft_swap, independently 
+known to have a *worse* noise floor, scored higher than highpass, which has the 
+best) -- a single-realization artifact. The one credible finding was in false-alarm 
+counts (a whole-series statistic, not tied to one instant): highpass cut them ~9x, 
+the DC-based corrections didn't. This script gets proper statistics on both.
 
-Performance: see kbo_occultation/injection_batch.py's module docstring. In
-short, a full blind search costs ~93s (dominated by a rolling-median
-baseline), so this batch reuses each method's baseline/sigma -- computed
-once from that method's full, *uninjected* light curve -- as an
-approximation for the noise floor of every trial's local scoring window,
-rather than recomputing it per trial. This is a known approximation (a
-short injected dip could, in principle, shift a median-filtered baseline
-computed directly on top of it), not an exact computation. The validation
-spot-check below checks how much this matters in practice, before the full
-grid runs: it compares this fast, cached-baseline local path against a slow,
-full-series recompute (no shortcuts at all) for one trial.
+Performance: see kbo_occultation/injection_batch.py's module docstring. In short, 
+a full blind search costs ~93s (dominated by a rolling-median baseline), so this 
+batch reuses each method's baseline/sigma -- computed once from that method's full, 
+*uninjected* light curve -- as an approximation for the noise floor of every 
+trial's local scoring window, rather than recomputing it per trial. This is a known 
+approximation (a short injected dip could, in principle, shift a median-filtered 
+baseline computed directly on top of it), not an exact computation. The validation
+spot-check below checks how much this matters in practice, before the full grid 
+runs: it compares this fast, cached-baseline local path against a slow, full-series 
+recompute (no shortcuts at all) for one trial.
 
-Caveat worth keeping in mind reading the results: the real HD-17316
-recording is only ~426s long, and each trial needs a pad_s=20s margin, so
-the ~20 trials per radius are not fully independent draws -- they overlap
-and re-examine the same handful of real noise features. Treat the resulting
-distributions as "how recovery varies with when in this run the event
-lands," not a rigorous i.i.d. ensemble.
+Caveat worth keeping in mind reading the results: the real HD-17316 recording is 
+only ~426s long, and each trial needs a pad_s=20s margin, so the ~20 trials per 
+radius are not fully independent draws -- they overlap and re-examine the same 
+handful of real noise features. Treat the resulting distributions as "how recovery 
+varies with when in this run the event lands," not a rigorous i.i.d. ensemble.
 """
 
 import time as time_module
