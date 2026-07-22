@@ -183,6 +183,7 @@ def matched_filter_snr(intensity: np.ndarray, sigma: float, template: Optional[n
     when testing against the noiseless simulated curve itself, e.g. to map out 
     detectability across a parameter grid before touching real data).
     """
+    #TODO revise if this is what causes so many false positives with the same SNR shape
     ref = np.asarray(intensity if template is None else template)
     residual = ref - 1.0
 
