@@ -82,7 +82,7 @@ def highpass_lightcurve(lc, cutoff_hz: float, method: str = "butterworth", **kwa
     """
     from .photometry import LightCurve  # local import: photometry imports this module too
 
-    fs = 1.0 / float(np.median(np.diff(lc.time)))
+    fs = 1.0 / lc.dt
     if method == "butterworth":
         filtered = highpass_butterworth(lc.signal, fs, cutoff_hz, **kwargs)
     elif method == "fft":

@@ -59,7 +59,7 @@ for star in order:
 fig1, axes1 = plt.subplots(len(order), 1, figsize=(9, 2.6 * len(order)), sharex=True)
 for ax, star in zip(np.atleast_1d(axes1), order):
     for label, lc, style in [("raw", raw_lcs[star], "-"), ("DC-combined", combined_lcs[star], "-")]:
-        fs = 1.0 / float(np.median(np.diff(lc.time)))
+        fs = 1.0 / lc.dt
         norm = lc.signal / np.mean(lc.signal) - 1.0
         nperseg = min(2**16, len(norm))
         f, Pxx = welch(norm, fs=fs, window="hann", nperseg=nperseg, noverlap=nperseg // 2, scaling="density")
@@ -82,7 +82,7 @@ bin_sizes = np.unique(np.round(np.logspace(0, 4, 30)).astype(int))
 print(f"{'star':10s} {'raw n=1':>10s} {'raw n=5000':>12s} {'comb n=1':>10s} {'comb n=5000':>12s}")
 for star in order:
     for label, lc, ls in [("raw", raw_lcs[star], "--"), ("DC-combined", combined_lcs[star], "-")]:
-        dt = float(np.median(np.diff(lc.time)))
+        dt = lc.dt
         norm = lc.signal / np.mean(lc.signal)
         sigma1 = robust_sigma(norm)
 

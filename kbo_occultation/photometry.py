@@ -11,19 +11,14 @@ from kbo_occultation.io import read_stat_binary_file
 from kbo_occultation.filtering import highpass_fft
 
 
-def _channel_signal(data, channel, statistic):
+def _channel_signal(data, channel):
     """
-    Extract the flux proxy for one channel from a stat-binary record array. 
-    ``"variance"`` (std**2) is proportional to photon flux for shot-noise-dominated 
-    AC-coupled PMT signals and is what the multiplicative injection model assumes; 
-    ``"std"`` keeps the raw recorded standard deviation.
+    Extract the flux proxy for one channel from a stat-binary record array.
+    Always the variance (std**2): it is proportional to photon flux for
+    shot-noise-dominated AC-coupled PMT signals and is what the multiplicative
+    injection model assumes.
     """
-    std = data[f"std_ch{channel}"]
-    if statistic == "variance":
-        return std ** 2
-    if statistic == "std":
-        return std
-    raise ValueError(f"statistic must be 'variance' or 'std', got {statistic!r}")
+    return data[f"std_ch{channel}"] ** 2
 
 
 class LightCurve:
@@ -31,6 +26,11 @@ class LightCurve:
         self.time = time
         self.signal = signal
         self.meta = meta or {}
+        # The recorded timestamps are unreliable, so the loaders always rebuild
+        # the time grid at a fixed cadence (reconstruct_time). dt is therefore a
+        # constant read straight off the grid, not something to re-derive from
+        # the timestamps at each use.
+        self.dt = float(time[1] - time[0])
 
     @classmethod
     def from_stat_binary(cls,
@@ -38,34 +38,36 @@ class LightCurve:
                      channel,
                      average=None,
                      low_freq_cut=None,
-                     time_mode="fixed",
-                     sample_time=config.standard_sampling,
-                     statistic="variance"):
+                     sample_time=config.standard_sampling):
         """
         Load one channel from a stat binary file.
 
-        - sample_time: The number of DAQ digitizations per statistics record (2**18 in the standard mode); 
-        each digitization lasts ``config.standard_sample_duration`` ns, so the record cadence is 
-        sample_time * standard_sample_duration ns (~0.5 ms for standard files). 
-        - statistic: Selects the flux proxy stored in ``signal`` ("variance" = std**2, "std" = raw std).
+        - sample_time: The number of DAQ digitizations per statistics record (2**18 in the standard mode);
+        each digitization lasts ``config.standard_sample_duration`` ns, so the record cadence is
+        sample_time * standard_sample_duration ns (~0.5 ms for standard files).
+
+        The recorded timestamps are unreliable, so the time grid is always
+        rebuilt at this fixed cadence; the flux proxy stored in ``signal`` is
+        always the variance (std**2).
         """
+        #TODO note that from_stat_binary and from_stat_binary_all are different. You should check if
+        # this affects something down the line
         if sample_time is None:
             raise ValueError("A sampling interval (in digitizations) must be provided")
 
         # Use the binary file function to read an observation file
         data = read_stat_binary_file(filename)
 
-        time = data["time_stamp"].astype(float) / 1.e6 # Now it's in seconds
-        t0 = time[0]
+        t0 = data["time_stamp"][0].astype(float) / 1.e6  # Now it's in seconds
         dt = sample_time * config.standard_sample_duration / 1e9
         fs = 1 / dt
 
-        signal = _channel_signal(data, channel, statistic)
+        signal = _channel_signal(data, channel)
 
-        # The time stamps are not reliable, so we re-write them.
-        if time_mode == "fixed":
-            time = reconstruct_time(len(signal), t0, dt)
+        # The time stamps are not reliable, so we always re-write them.
+        time = reconstruct_time(len(signal), t0, dt)
 
+        # TODO check if the order of averaging and filtering is relevant
         # --- averaging ---
         if average is not None and average > 1:
             signal = average_chunks(signal, average)
@@ -79,34 +81,31 @@ class LightCurve:
         return cls(time, signal, meta={
             "channel": channel,
             "source": filename,
-            "statistic": statistic,
         })
 
     @classmethod
-    def from_stat_binary_all(cls, filename, time_mode="fixed",
-                             sample_time=config.standard_sampling,
-                             statistic="variance"):
+    def from_stat_binary_all(cls, filename,
+                             sample_time=config.standard_sampling):
         """
-        Load all channels (A, B, C) from a stat binary file as a dict of LightCurves. 
-        Same conventions as ``from_stat_binary``; the flux proxy defaults to the variance (std**2).
+        Load all channels (A, B, C) from a stat binary file as a dict of
+        LightCurves. Same conventions as ``from_stat_binary``: the time grid is
+        always rebuilt at a fixed cadence and the flux proxy is the variance
+        (std**2).
         """
         if sample_time is None:
             raise ValueError("A sampling interval (in digitizations) must be provided")
 
         data = read_stat_binary_file(filename)
-        time = data["time_stamp"].astype(float) / 1e6
-        t0 = time[0]
+        t0 = data["time_stamp"][0].astype(float) / 1e6
         dt = sample_time * config.standard_sample_duration / 1e9
 
-        # The time stamps are not reliable, so we re-write them.
-        if time_mode == "fixed":
-            time = reconstruct_time(len(data["std_chA"]), t0, dt)
+        # The time stamps are not reliable, so we always re-write them.
+        time = reconstruct_time(len(data["std_chA"]), t0, dt)
 
         lcs = {}
         for ch in ["A", "B", "C"]:
-            lcs[ch] = cls(time, _channel_signal(data, ch, statistic),
-                          meta={"channel": ch, "source": filename,
-                                "statistic": statistic})
+            lcs[ch] = cls(time, _channel_signal(data, ch),
+                          meta={"channel": ch, "source": filename})
         return lcs
     
     def plot(self, ax=None, **kwargs):

@@ -125,7 +125,7 @@ colors = {"raw": "C0", "fft_swap": "C1", "detrend": "C2", "despike": "C3"}
 fig1, axes1 = plt.subplots(len(order), 1, figsize=(9, 2.6 * len(order)), sharex=True)
 for ax, star in zip(np.atleast_1d(axes1), order):
     for label, lc in variants[star].items():
-        fs = 1.0 / float(np.median(np.diff(lc.time)))
+        fs = 1.0 / lc.dt
         norm = lc.signal / np.mean(lc.signal) - 1.0
         f, Pxx = segmented_welch(lc.time, norm, fs)
         ax.plot(f[1:], Pxx[1:], lw=1.1, color=colors[label], label=label)
@@ -160,7 +160,7 @@ bin_sizes = np.unique(np.round(np.logspace(0, 4, 30)).astype(int))
 fig2, axes2 = plt.subplots(len(order), 1, figsize=(8, 2.6 * len(order)), sharex=True)
 for ax, star in zip(np.atleast_1d(axes2), order):
     for label, lc in variants[star].items():
-        dt = float(np.median(np.diff(lc.time)))
+        dt = lc.dt
         norm = lc.signal / np.mean(lc.signal)
         measured, valid_n = [], []
         for n in bin_sizes:

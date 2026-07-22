@@ -98,7 +98,6 @@ def search_observation(
     min_ntel: int = 2,
     max_pairwise_dt_s: Optional[float] = None,
     n_background_shifts: int = 200,
-    statistic: str = "variance",
 ) -> ObservationSearchResult:
     """
     Blind coincidence search over one observation.
@@ -138,7 +137,6 @@ def search_observation(
         within one shadow-crossing window.
     n_background_shifts : time-shift realizations for the accidental
         rate (0 disables the background estimate).
-    statistic : flux proxy passed to the loader ("variance" or "std").
 
     Returns
     -------
@@ -156,7 +154,7 @@ def search_observation(
     v_rel = kinematics.v_rel_mps
 
     # ─── Load all channels ───
-    lcs = LightCurve.from_stat_binary_all(bin_file, statistic=statistic)
+    lcs = LightCurve.from_stat_binary_all(bin_file)
     channels = [ch for ch in array.channels() if ch in lcs]
     if len(channels) < min_ntel:
         raise ValueError(f"Only channels {channels} available; min_ntel={min_ntel}")
@@ -261,6 +259,5 @@ def search_observation(
             "snr_threshold": snr_threshold,
             "max_chi2_reduced": max_chi2_reduced,
             "min_ntel": min_ntel,
-            "statistic": statistic,
         },
     )

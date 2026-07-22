@@ -94,7 +94,7 @@ colors = {"raw": "C0", "highpass": "C1", "highpass+despike": "C3"}
 fig1, axes1 = plt.subplots(len(order), 1, figsize=(9, 2.6 * len(order)), sharex=True)
 for ax, star in zip(np.atleast_1d(axes1), order):
     for label, lc in variants[star].items():
-        fs = 1.0 / float(np.median(np.diff(lc.time)))
+        fs = 1.0 / lc.dt
         norm = lc.signal / np.mean(raw_lcs[star].signal) - 1.0
         f, Pxx = segmented_welch(lc.time, norm, fs)
         ax.plot(f[1:], Pxx[1:], lw=1.1, color=colors[label], label=label)

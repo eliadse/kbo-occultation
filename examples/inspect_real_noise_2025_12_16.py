@@ -60,7 +60,7 @@ order = sorted(lightcurves, key=lambda s: MAG_B.get(s, 99))  # brightest first, 
 print(f"{'star':10s} {'n':>8s} {'dt_ms':>8s} {'mean':>10s} {'std':>10s} {'noise%':>8s}")
 for star in order:
     lc = lightcurves[star]
-    dt = float(np.median(np.diff(lc.time)))
+    dt = lc.dt
     mean, std = np.mean(lc.signal), np.std(lc.signal)
     print(f"{star:10s} {len(lc.signal):8d} {dt*1e3:8.4f} {mean:10.3f} {std:10.3f} {100*std/mean:8.3f}")
 
@@ -68,7 +68,7 @@ for star in order:
 fig1, ax1 = plt.subplots(figsize=(9, 6))
 for star in order:
     lc = lightcurves[star]
-    fs = 1.0 / float(np.median(np.diff(lc.time)))
+    fs = 1.0 / lc.dt
     norm = lc.signal / np.mean(lc.signal) - 1.0
     nperseg = min(2**16, len(norm))
     f, Pxx = welch(norm, fs=fs, window="hann", nperseg=nperseg, noverlap=nperseg // 2, scaling="density")
@@ -91,7 +91,7 @@ bin_sizes = bin_sizes[bin_sizes >= 1]
 
 for star in order:
     lc = lightcurves[star]
-    dt = float(np.median(np.diff(lc.time)))
+    dt = lc.dt
     norm = lc.signal / np.mean(lc.signal)
     sigma1 = robust_sigma(norm)  # single-sample scatter, robust to outliers/glitches
 
@@ -142,7 +142,7 @@ try:
             continue
 
         # Bin the fast signal down to the DC's ~1 Hz cadence for a fair comparison
-        dt_fast = float(np.median(np.diff(lc.time)))
+        dt_fast = lc.dt
         n_bin = max(1, int(round(1.0 / dt_fast)))
         t_binned, s_binned, _ = bin_average(lc.time, lc.signal, n_bin)
 
