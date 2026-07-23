@@ -35,6 +35,7 @@ Thumbs.db
 data/observations
 *.bin
 *.pkl
+*.npz
 
 outputs/
 tests/

@@ -18,7 +18,11 @@ from kbo_occultation.config import BandpassConfig, GridConfig, NumericalConfig, 
 from kbo_occultation.search import search_observation
 
 DATA_DIR = f"{PACKAGE_DATA}/observations"
-DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.bin"
+# Load the pre-processed .npz cache (built by examples/preprocess_observations.py)
+# instead of re-parsing the raw .bin every run. search_observation() accepts
+# either a .npz cache or a raw .bin transparently. The other real-data examples
+# follow the same "<name>.bin -> <name>.npz" swap.
+DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz"
 DC_PKL = f"{DATA_DIR}/DCs/2025_12_16/dc_report.pkl"
 
 result = search_observation(

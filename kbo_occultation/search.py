@@ -40,6 +40,18 @@ class ObservationSearchResult:
     meta: dict = field(default_factory=dict)
 
 
+def _load_all_channels(path: str) -> Dict[str, LightCurve]:
+    """
+    Load every channel of one observation as a dict of LightCurves,
+    dispatching on the file type: a pre-processed ``.npz`` cache goes through
+    ``from_preprocessed_all`` (raw variance, to match the binary path), anything
+    else is parsed as a raw stat-binary via ``from_stat_binary_all``.
+    """
+    if str(path).endswith(".npz"):
+        return LightCurve.from_preprocessed_all(path)
+    return LightCurve.from_stat_binary_all(path)
+
+
 def _dedupe_candidates(candidates: List[Candidate], min_separation_s: float) -> List[Candidate]:
     """
     Merge candidates found by different radius templates at (nearly) the
@@ -154,7 +166,7 @@ def search_observation(
     v_rel = kinematics.v_rel_mps
 
     # ─── Load all channels ───
-    lcs = LightCurve.from_stat_binary_all(bin_file)
+    lcs = _load_all_channels(bin_file)
     channels = [ch for ch in array.channels() if ch in lcs]
     if len(channels) < min_ntel:
         raise ValueError(f"Only channels {channels} available; min_ntel={min_ntel}")

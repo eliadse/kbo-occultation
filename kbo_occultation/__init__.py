@@ -120,3 +120,8 @@ from .filtering import (
     highpass_lightcurve,
     remove_outliers_lightcurve,
 )
+
+from .photometry import (
+    LightCurve,
+    preprocess_observation,
+)
