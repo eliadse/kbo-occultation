@@ -54,7 +54,7 @@ from kbo_occultation.dc_combine import (
 )
 
 DATA_DIR = f"{PACKAGE_DATA}/observations"
-DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.bin"
+DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz"
 DC_PKL = f"{DATA_DIR}/DCs/2025_12_16/dc_report.pkl"
 CHANNEL = "A"
 
@@ -92,7 +92,7 @@ template_duration_s = float(template_time.max() - template_time.min())
 print(f"Template: R={RADIUS_M}m depth={1 - intensity.min():.4f} duration={template_duration_s:.4f}s")
 
 # ─── 2. Load real data, inject once at a fixed, known t0 ───────────────
-lc = LightCurve.from_stat_binary_all(DATA_FILE)[CHANNEL]
+lc = LightCurve.from_preprocessed_all(DATA_FILE)[CHANNEL]
 t0_s = lc.time[0] + 0.5 * (lc.time[-1] - lc.time[0])
 inj = inject_occultation(lc.time, lc.signal, x_m, intensity, SHADOW_VELOCITY_MPS, t0_s=t0_s)
 injected_lc = LightCurve(inj.time, inj.injected_signal, meta=dict(lc.meta))

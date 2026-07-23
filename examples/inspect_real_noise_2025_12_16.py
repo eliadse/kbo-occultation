@@ -49,11 +49,11 @@ MAG_B = {
 }
 
 # ─── Load the 6 light curves ──────────────────────────────────────────
-filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.bin"))
+filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.npz"))
 lightcurves = {}
 for fn in filenames:
     star = re.search(r"15min_(.*)_10002", fn).group(1)
-    lightcurves[star] = LightCurve.from_stat_binary_all(fn)[CHANNEL]
+    lightcurves[star] = LightCurve.from_preprocessed_all(fn)[CHANNEL]
 
 order = sorted(lightcurves, key=lambda s: MAG_B.get(s, 99))  # brightest first, dark last
 

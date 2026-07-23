@@ -39,7 +39,7 @@ from kbo_occultation.filtering import highpass_lightcurve
 from kbo_occultation.upper_limits import SurveyExposure, cumulative_density_upper_limit
 
 DATA_DIR = f"{PACKAGE_DATA}/observations"
-DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.bin"
+DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz"
 STAR_NAME = "HD-17316"
 
 DISTANCE_AU = 43.0
@@ -65,7 +65,7 @@ method_specs = {
     "highpass": lambda lc: highpass_lightcurve(lc, HIGHPASS_CUTOFF_HZ),
 }
 
-lcs = LightCurve.from_stat_binary_all(DATA_FILE)
+lcs = LightCurve.from_preprocessed_all(DATA_FILE)
 
 trials, profiles = run_array_injection_monte_carlo(
     lcs, ORM_ARRAY,

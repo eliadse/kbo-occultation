@@ -55,7 +55,7 @@ from kbo_occultation.dc_combine import (
 )
 
 DATA_DIR = f"{PACKAGE_DATA}/observations"
-DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.bin"
+DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz"
 DC_PKL = f"{DATA_DIR}/DCs/2025_12_16/dc_report.pkl"
 CHANNEL = "A"
 
@@ -101,7 +101,7 @@ method_specs = {
 }
 METHODS = list(method_specs.keys())
 
-lc = LightCurve.from_stat_binary_all(DATA_FILE)[CHANNEL]
+lc = LightCurve.from_preprocessed_all(DATA_FILE)[CHANNEL]
 
 # ─── Validation spot-check: cached-baseline local path vs. slow full-series ground truth ───
 print("Validation spot-check (1 trial, method='highpass', radius=RADII_M[0]) ...")

@@ -98,13 +98,13 @@ def segmented_welch(time, signal, fs, nperseg_target=2**14, min_run_samples=1024
 
     return freq_common, Pxx_accum / weight_total
 
-filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.bin"))
+filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.npz"))
 raw_lcs = {}
 for fn in filenames:
     star = re.search(r"15min_(.*)_10002", fn).group(1)
     if star == "dark":
         continue
-    raw_lcs[star] = LightCurve.from_stat_binary_all(fn)[CHANNEL]
+    raw_lcs[star] = LightCurve.from_preprocessed_all(fn)[CHANNEL]
 
 order = sorted(raw_lcs, key=lambda s: MAG_B.get(s, 99))
 

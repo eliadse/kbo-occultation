@@ -38,11 +38,11 @@ MAG_B = {
     "HD-17316": 7.53, "HD-20920": 7.96,
 }
 
-filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.bin"))
+filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.npz"))
 raw_lcs = {}
 for fn in filenames:
     star = re.search(r"15min_(.*)_10002", fn).group(1)
-    lc = LightCurve.from_stat_binary_all(fn)[CHANNEL]
+    lc = LightCurve.from_preprocessed_all(fn)[CHANNEL]
     if star == "dark":
         continue  # no star flux -> DC report has nothing meaningful to combine
     raw_lcs[star] = lc
