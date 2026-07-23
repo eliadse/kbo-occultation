@@ -118,4 +118,5 @@ from .filtering import (
     highpass_fft,
     highpass_butterworth,
     highpass_lightcurve,
+    remove_outliers_lightcurve,
 )

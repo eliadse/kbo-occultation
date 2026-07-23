@@ -19,6 +19,7 @@ signal) and despike afterward.
 
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
+from scipy.ndimage import median_filter
 
 
 def highpass_fft(signal: np.ndarray, fs: float, cutoff_hz: float) -> np.ndarray:
@@ -93,3 +94,93 @@ def highpass_lightcurve(lc, cutoff_hz: float, method: str = "butterworth", **kwa
     meta = dict(lc.meta)
     meta.update({"highpass_cutoff_hz": cutoff_hz, "highpass_method": method})
     return LightCurve(lc.time, filtered, meta=meta)
+
+
+def remove_outliers_lightcurve(lc, threshold_sigma: float = 9.0, window_samples: int = 21,
+                               polarity: str = "positive"):
+    """
+    Remove isolated single-sample spikes from a LightCurve's signal.
+
+    Self-contained (no DC report needed, unlike dc_combine.despike_lightcurve_with_dc).
+    Targets the narrow upward spikes (typically one sample) seen in the fast
+    curves -- cosmic hits and readout glitches -- *without* touching real
+    structure: the broad wind/tracking dips or the ms-scale occultation dips the
+    search pipeline is meant to find.
+
+    Two choices make it specific to those spikes rather than a general sigma clip:
+
+    - The baseline is a *short* rolling median (``window_samples``, a handful of
+      samples), so it hugs the real signal and only a point that sticks out from
+      its immediate neighbours has a large residual. A wide window would instead
+      straddle broad features and flag their extrema.
+    - Only ``polarity="positive"`` residuals are flagged by default, so downward
+      dips (real occultations, wind valleys) are left completely alone.
+
+    Flagged samples are *replaced by the local baseline value* (the neighbours'
+    median), which keeps the array length and uniform time grid intact -- so the
+    output stays valid input to highpass_lightcurve, PSD estimation and the
+    matched filter, unlike dropping samples.
+
+    Parameters
+    ----------
+    lc : LightCurve
+        Must be uniformly sampled (true of every LightCurve.from_stat_binary*
+        loader).
+    threshold_sigma : float
+        Residuals beyond this many robust (MAD-based) sigmas are flagged.
+    window_samples : int
+        Width of the short rolling-median baseline, in samples (forced odd,
+        minimum 3). Keep it small -- a handful of samples -- so only isolated
+        spikes, not broad features, are caught.
+    polarity : {"positive", "negative", "both"}
+        Which side to clip. "positive" (default) flags only upward spikes;
+        "negative" only downward ones; "both" is a symmetric clip.
+
+    Returns
+    -------
+    LightCurve
+        New LightCurve on the same time grid with flagged samples replaced by
+        the local baseline. ``meta`` gains ``outlier_threshold_sigma``,
+        ``outlier_window_samples``, ``outlier_polarity`` and ``outlier_fraction``.
+    """
+    from .photometry import LightCurve  # local import: photometry imports this module too
+    from .matched_filter import robust_sigma
+
+    if polarity not in ("positive", "negative", "both"):
+        raise ValueError(f"polarity must be 'positive', 'negative' or 'both', got {polarity!r}")
+
+    signal = np.asarray(lc.signal)
+
+    window_samples = max(3, int(window_samples))
+    if window_samples % 2 == 0:
+        window_samples += 1
+
+    baseline = median_filter(signal, size=window_samples, mode="nearest")
+    residual = signal - baseline
+    sigma = robust_sigma(residual)
+    if sigma == 0:
+        # If the residual is mostly exactly zero (heavily quantized or very
+        # stable stretches), the MAD-based robust sigma degenerates to zero and
+        # any nonzero residual would trivially "exceed" it. Fall back to the
+        # plain std, which stays well-defined as long as there is real scatter.
+        # (Same guard as dc_combine.flag_dc_excursions.)
+        sigma = float(np.std(residual))
+
+    if polarity == "positive":
+        bad = residual > threshold_sigma * sigma
+    elif polarity == "negative":
+        bad = residual < -threshold_sigma * sigma
+    else:
+        bad = np.abs(residual) > threshold_sigma * sigma
+
+    cleaned = signal.copy()
+    cleaned[bad] = baseline[bad]
+
+    meta = dict(lc.meta)
+    meta.update({
+        "outlier_threshold_sigma": threshold_sigma,
+        "outlier_window_samples": window_samples,
+        "outlier_polarity": polarity,
+        "outlier_fraction": float(np.mean(bad)),
+    })
+    return LightCurve(lc.time, cleaned, meta=meta)
