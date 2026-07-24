@@ -86,31 +86,40 @@ fig1.savefig("noise_psd_2025_12_16.png", dpi=200)
 
 # ─── 2. Noise vs. bin size (Allan-like curve) ──────────────────────────
 fig2, ax2 = plt.subplots(figsize=(8, 6))
-bin_sizes = np.unique(np.round(np.logspace(0, 4, 30)).astype(int))
-bin_sizes = bin_sizes[bin_sizes >= 1]
+bin_sizes = np.array([1,2,5,10,20,50,100, 150, 200, 250])
+bin_sizes0 = np.unique(np.round(np.logspace(0, 4, 30)).astype(int))
+print(type(bin_sizes0))
+bin_sizes0 = bin_sizes0[bin_sizes0 >= 1]
+print(bin_sizes)
+print(bin_sizes0)
 
 for star in order:
     lc = lightcurves[star]
-    dt = lc.dt
+    dt = lc.dt * 1000
     norm = lc.signal / np.mean(lc.signal)
-    sigma1 = robust_sigma(norm)  # single-sample scatter, robust to outliers/glitches
+    #sigma1 = robust_sigma(norm)  # single-sample scatter, robust to outliers/glitches
 
     measured = []
+    avg = []
     valid_n = []
     for n in bin_sizes:
         if n >= len(norm) // 4:
             break
-        _, s_b, _ = bin_average(lc.time, norm, n)
+        _, s_b, avg_sig = bin_average(lc.time, norm, n)
+        # bin average provides the sigma of each averaged chunk
+        # to see how the number of chunks affects this, we plot the mean
+        avg.append(np.mean(avg_sig))
         measured.append(robust_sigma(s_b))
         valid_n.append(n)
 
     valid_n = np.array(valid_n)
-    line, = ax2.plot(valid_n * dt, measured, marker=".", ms=4, lw=1, label=star)
-    ax2.plot(valid_n * dt, sigma1 / np.sqrt(valid_n), ls="--", lw=0.8, color=line.get_color(), alpha=0.6)
+    #ax2.plot(valid_n * dt, measured, marker=".", ms=4, lw=1, label=star)
+    line, = ax2.plot(valid_n * dt, avg, marker="*", ms=4, lw=2, label=star)
+    ax2.plot(valid_n * dt, 1 / np.sqrt(valid_n), ls="--", lw=0.8, color=line.get_color(), alpha=0.6)
 
-ax2.set_xscale("log")
+#ax2.set_xscale("log")
 ax2.set_yscale("log")
-ax2.set_xlabel("Bin duration (s)")
+ax2.set_xlabel("Bin duration (ms)")
 ax2.set_ylabel(r"Scatter of binned $\delta I/I$ (robust $\sigma$)")
 ax2.set_title("Noise vs. averaging timescale (dashed = white-noise $1/\\sqrt{n}$ prediction)")
 ax2.legend(fontsize=8)
