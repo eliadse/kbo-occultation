@@ -140,10 +140,10 @@ for label, v_lc in variants.items():
         nearest = min(survivors, key=lambda c: abs(c.time_s - inj.t0_s))
         offset_ms = (nearest.time_s - inj.t0_s) * 1e3
         false_alarms = len(survivors) - 1
-        print(f"{label:18s} {mf.sigma:10.5f} {nearest.snr:14.2f} {offset_ms:12.3f} "
+        print(f"{label:18s} {np.median(mf.sigma):10.5f} {nearest.snr:14.2f} {offset_ms:12.3f} "
               f"{len(candidates):11d} {false_alarms:13d}")
     else:
-        print(f"{label:18s} {mf.sigma:10.5f} {'none':>14s} {'--':>12s} {len(candidates):11d} {'--':>13s}")
+        print(f"{label:18s} {np.median(mf.sigma):10.5f} {'none':>14s} {'--':>12s} {len(candidates):11d} {'--':>13s}")
 
 # ─── Plots ──────────────────────────────────────────────────────────────
 pad_s = 5 * template_duration_s

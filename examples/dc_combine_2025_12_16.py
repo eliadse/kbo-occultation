@@ -4,13 +4,9 @@ Apply the fast/slow-DC frequency-domain combination (dc_combine.py) to the
 2025-12-16 MAGIC-II run and check whether it actually removes the
 correlated sub-few-Hz noise excess found in inspect_real_noise_2025_12_16.py.
 
-Two panels per star:
-  1. PSD of the fractional-flux fluctuations, raw vs. DC-combined.
-  2. Noise-vs-bin-size curve, raw vs. DC-combined, against the white-noise
-     1/sqrt(n) prediction -- if the correlated component really is coming
-     from whatever the slow DC already sees, the combined curve should sit
-     much closer to that prediction over the range where averaging
-     previously did nothing.
+PSD of the fractional-flux fluctuations, raw vs. DC-combined -- if the
+correlated component really is coming from whatever the slow DC already
+sees, the combined PSD should show a reduced sub-few-Hz excess.
 """
 
 import glob
@@ -24,8 +20,6 @@ from scipy.signal import welch
 
 from kbo_occultation import PACKAGE_DATA
 from kbo_occultation.photometry import LightCurve
-from kbo_occultation.detectability import bin_average
-from kbo_occultation.matched_filter import robust_sigma
 from kbo_occultation.dc_combine import combine_lightcurve_with_dc
 
 CHANNEL = "A"  # MAGIC-II
@@ -75,51 +69,4 @@ axes1[-1].set_xlabel("Frequency (Hz)") if len(order) > 1 else ax.set_xlabel("Fre
 fig1.tight_layout()
 fig1.savefig("noise_psd_dc_combined_2025_12_16.png", dpi=200)
 
-# ─── Noise vs. bin size: raw vs. combined ──────────────────────────────
-fig2, ax2 = plt.subplots(figsize=(8, 6))
-bin_sizes = np.unique(np.round(np.logspace(0, 4, 30)).astype(int))
-
-print(f"{'star':10s} {'raw n=1':>10s} {'raw n=5000':>12s} {'comb n=1':>10s} {'comb n=5000':>12s}")
-for star in order:
-    for label, lc, ls in [("raw", raw_lcs[star], "--"), ("DC-combined", combined_lcs[star], "-")]:
-        dt = lc.dt
-        norm = lc.signal / np.mean(lc.signal)
-        sigma1 = robust_sigma(norm)
-
-        measured, valid_n = [], []
-        for n in bin_sizes:
-            if n >= len(norm) // 4:
-                break
-            _, s_b, _ = bin_average(lc.time, norm, n)
-            measured.append(robust_sigma(s_b))
-            valid_n.append(n)
-        valid_n = np.array(valid_n)
-
-        color = f"C{order.index(star)}"
-        ax2.plot(valid_n * dt, measured, ls, lw=1.3, color=color,
-                  label=f"{star} ({label})" if label == "raw" else None,
-                  alpha=1.0 if label == "DC-combined" else 0.4)
-
-        if label == "raw":
-            row = [sigma1]
-        else:
-            row.append(sigma1)
-
-    # print n=1 / n=5000 for both raw and combined
-    raw_sigma1 = robust_sigma(raw_lcs[star].signal / np.mean(raw_lcs[star].signal))
-    comb_sigma1 = robust_sigma(combined_lcs[star].signal / np.mean(combined_lcs[star].signal))
-    _, raw_5000, _ = bin_average(raw_lcs[star].time, raw_lcs[star].signal / np.mean(raw_lcs[star].signal), 5000)
-    _, comb_5000, _ = bin_average(combined_lcs[star].time, combined_lcs[star].signal / np.mean(combined_lcs[star].signal), 5000)
-    print(f"{star:10s} {raw_sigma1:10.5f} {robust_sigma(raw_5000):12.5f} {comb_sigma1:10.5f} {robust_sigma(comb_5000):12.5f}")
-
-ax2.set_xscale("log")
-ax2.set_yscale("log")
-ax2.set_xlabel("Bin duration (s)")
-ax2.set_ylabel(r"Scatter of binned $\delta I/I$ (robust $\sigma$)")
-ax2.set_title("Noise vs. averaging timescale: raw (dashed, faint) vs. DC-combined (solid)")
-ax2.legend(fontsize=8)
-ax2.grid(alpha=0.3, which="both")
-fig2.tight_layout()
-fig2.savefig("noise_vs_binsize_dc_combined_2025_12_16.png", dpi=200)
-
-print("\nSaved: noise_psd_dc_combined_2025_12_16.png, noise_vs_binsize_dc_combined_2025_12_16.png")
+print("\nSaved: noise_psd_dc_combined_2025_12_16.png")

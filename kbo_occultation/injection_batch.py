@@ -399,7 +399,7 @@ def run_injection_monte_carlo(
             candidates = find_candidates(mf, snr_threshold=snr_threshold)
             survivors = [c for c in candidates if c.chi2_reduced <= max_chi2_reduced]
             noise_profiles.append(MethodNoiseProfile(
-                method=method, radius_m=radius_m, sigma=sigma,
+                method=method, radius_m=radius_m, sigma=float(np.median(sigma)),
                 n_candidates=len(candidates), n_false_alarms=len(survivors),
             ))
 
@@ -429,6 +429,7 @@ def run_injection_monte_carlo(
                 local_time = corrected.time[mask]
                 local_signal = corrected.signal[mask]
                 local_baseline = cached_baseline[mask]
+                local_sigma = cached_sigma[mask]
 
                 if method in per_trial_reshape_methods:
                     # Position-dependent reshaping (e.g. dc_fft_swap): rebuild pinned to
@@ -442,7 +443,7 @@ def run_injection_monte_carlo(
 
                 mf = sliding_matched_filter_snr(
                     local_time, local_signal, search_time, search_intensity,
-                    baseline=local_baseline, sigma=cached_sigma,
+                    baseline=local_baseline, sigma=local_sigma,
                 )
                 candidates = find_candidates(mf, snr_threshold=snr_threshold)
                 survivors = [c for c in candidates if c.chi2_reduced <= max_chi2_reduced]
@@ -646,7 +647,7 @@ def run_array_injection_monte_carlo(
             candidates = find_candidates(mf, snr_threshold=snr_threshold)
             survivors = [c for c in candidates if c.chi2_reduced <= max_chi2_reduced]
             noise_profiles.append(MethodNoiseProfile(
-                method=method, radius_m=radius_m, sigma=sigma,
+                method=method, radius_m=radius_m, sigma=float(np.median(sigma)),
                 n_candidates=len(candidates), n_false_alarms=len(survivors),
                 channel=ch,
             ))
@@ -684,6 +685,7 @@ def run_array_injection_monte_carlo(
                     local_time = corrected.time[mask]
                     local_signal = corrected.signal[mask]
                     local_baseline = cached_baseline[mask]
+                    local_sigma = cached_sigma[mask]
 
                     if method in per_trial_reshape_methods:
                         search_time, search_intensity = build_search_template(
@@ -694,7 +696,7 @@ def run_array_injection_monte_carlo(
 
                     mf = sliding_matched_filter_snr(
                         local_time, local_signal, search_time, search_intensity,
-                        baseline=local_baseline, sigma=cached_sigma,
+                        baseline=local_baseline, sigma=local_sigma,
                     )
                     candidates = find_candidates(mf, snr_threshold=snr_threshold)
                     survivors = [c for c in candidates if c.chi2_reduced <= max_chi2_reduced]
@@ -705,7 +707,7 @@ def run_array_injection_monte_carlo(
                         recovered_per_channel[ch] = True
                         recovered_candidates.append(TelescopeSearchResult(
                             channel=ch, telescope=array.by_channel(ch).name,
-                            candidates=[nearest], sigma=cached_sigma,
+                            candidates=[nearest], sigma=float(np.median(local_sigma)),
                             live_time_s=float(lc.time[-1] - lc.time[0]),
                         ))
                     else:

@@ -144,7 +144,7 @@ mask = (corrected.time >= val_t0 - PAD_S) & (corrected.time <= val_t0 + PAD_S)
 t_start = time_module.perf_counter()
 mf_local = sliding_matched_filter_snr(
     corrected.time[mask], corrected.signal[mask], search_time, search_intensity,
-    baseline=cached_baseline[mask], sigma=cached_sigma,
+    baseline=cached_baseline[mask], sigma=cached_sigma[mask],
 )
 local_time_s = time_module.perf_counter() - t_start
 survivors_local = [c for c in find_candidates(mf_local, snr_threshold=SNR_THRESHOLD) if c.chi2_reduced <= MAX_CHI2_REDUCED]

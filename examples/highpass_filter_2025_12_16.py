@@ -32,8 +32,6 @@ from scipy.signal import welch
 
 from kbo_occultation import PACKAGE_DATA
 from kbo_occultation.photometry import LightCurve
-from kbo_occultation.detectability import bin_average
-from kbo_occultation.matched_filter import robust_sigma
 from kbo_occultation.filtering import highpass_lightcurve
 from kbo_occultation.dc_combine import despike_lightcurve_with_dc
 
@@ -108,21 +106,5 @@ for ax, star in zip(np.atleast_1d(axes1), order):
 axes1[-1].set_xlabel("Frequency (Hz)") if len(order) > 1 else ax.set_xlabel("Frequency (Hz)")
 fig1.tight_layout()
 fig1.savefig("noise_psd_highpass_2025_12_16.png", dpi=200)
-
-# ─── Summary table ───────────────────────────────────────────────────────
-bin_sizes_report = [1, 100, 5000]
-print(f"{'star':10s} {'method':18s}", *[f"n={n:>6d}" for n in bin_sizes_report])
-for star in order:
-    for label, lc in variants[star].items():
-        norm = lc.signal / np.mean(raw_lcs[star].signal)
-        row = []
-        for n in bin_sizes_report:
-            if n == 1:
-                row.append(robust_sigma(norm))
-            else:
-                _, s_b, _ = bin_average(lc.time, norm, n)
-                row.append(robust_sigma(s_b))
-        print(f"{star:10s} {label:18s}", *[f"{v:10.5f}" for v in row])
-    print()
 
 print(f"Saved: noise_psd_highpass_2025_12_16.png (cutoff={CUTOFF_HZ} Hz)")

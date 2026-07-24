@@ -230,7 +230,8 @@ def search_observation(
 
         candidates = _dedupe_candidates(all_candidates, template_duration_s)
         per_telescope[ch] = TelescopeSearchResult(
-            channel=ch, telescope=tel.name, candidates=candidates, sigma=sigma,
+            channel=ch, telescope=tel.name, candidates=candidates,
+            sigma=float(np.median(sigma)),
             live_time_s=float(corrected.time[-1] - corrected.time[0]),
         )
 

@@ -44,8 +44,6 @@ from scipy.signal import welch
 
 from kbo_occultation import PACKAGE_DATA
 from kbo_occultation.photometry import LightCurve
-from kbo_occultation.detectability import bin_average
-from kbo_occultation.matched_filter import robust_sigma
 from kbo_occultation.dc_combine import (
     combine_lightcurve_with_dc,
     detrend_lightcurve_with_dc,
@@ -139,46 +137,4 @@ axes1[-1].set_xlabel("Frequency (Hz)") if len(order) > 1 else ax.set_xlabel("Fre
 fig1.tight_layout()
 fig1.savefig("noise_psd_comparison_2025_12_16.png", dpi=200)
 
-# ─── Summary table: robust sigma at a few bin sizes ─────────────────────
-bin_sizes_report = [1, 100, 5000]
-print(f"{'star':10s} {'method':10s}", *[f"n={n:>6d}" for n in bin_sizes_report])
-for star in order:
-    for label, lc in variants[star].items():
-        norm = lc.signal / np.mean(lc.signal)
-        row = []
-        for n in bin_sizes_report:
-            if n == 1:
-                row.append(robust_sigma(norm))
-            else:
-                _, s_b, _ = bin_average(lc.time, norm, n)
-                row.append(robust_sigma(s_b))
-        print(f"{star:10s} {label:10s}", *[f"{v:10.5f}" for v in row])
-    print()
-
-# ─── Noise vs. bin size, all variants overlaid, one panel per star ──────
-bin_sizes = np.unique(np.round(np.logspace(0, 4, 30)).astype(int))
-fig2, axes2 = plt.subplots(len(order), 1, figsize=(8, 2.6 * len(order)), sharex=True)
-for ax, star in zip(np.atleast_1d(axes2), order):
-    for label, lc in variants[star].items():
-        dt = lc.dt
-        norm = lc.signal / np.mean(lc.signal)
-        measured, valid_n = [], []
-        for n in bin_sizes:
-            if n >= len(norm) // 4:
-                break
-            _, s_b, _ = bin_average(lc.time, norm, n)
-            measured.append(robust_sigma(s_b))
-            valid_n.append(n)
-        valid_n = np.array(valid_n)
-        ax.plot(valid_n * dt, measured, lw=1.2, color=colors[label], label=label)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_ylabel(r"Scatter $\delta I/I$")
-    ax.set_title(star)
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3, which="both")
-axes2[-1].set_xlabel("Bin duration (s)") if len(order) > 1 else ax.set_xlabel("Bin duration (s)")
-fig2.tight_layout()
-fig2.savefig("noise_vs_binsize_comparison_2025_12_16.png", dpi=200)
-
-print("Saved: noise_psd_comparison_2025_12_16.png, noise_vs_binsize_comparison_2025_12_16.png")
+print("Saved: noise_psd_comparison_2025_12_16.png")

@@ -23,7 +23,9 @@ from scipy.signal import correlate, find_peaks
 class MatchedFilterResult:
     time: np.ndarray
     snr: np.ndarray
-    sigma: float
+    # Local (per-sample) robust noise level, aligned with data_time /
+    # residual_data -- see compute_baseline_and_sigma.
+    sigma: np.ndarray
     baseline: np.ndarray
     dt_s: float
     template_duration_s: float
@@ -54,11 +56,11 @@ def robust_sigma(x: np.ndarray) -> float:
 
 def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_duration_s: float,
                                 detrend_window_s: Optional[float] = None,
-                                decimate="auto") -> Tuple[np.ndarray, float]:
+                                decimate="auto") -> Tuple[np.ndarray, np.ndarray]:
     """
-    Rolling-median baseline (scipy.ndimage.median_filter) and the
-    resulting residual's robust_sigma, factored out of
-    sliding_matched_filter_snr so it can be computed once and reused
+    Rolling-median baseline (scipy.ndimage.median_filter) and a local,
+    per-sample robust noise level of the resulting residual, factored
+    out of sliding_matched_filter_snr so it can be computed once and reused
     (e.g. injection_batch.py caches this per noise-reduction method
     instead of recomputing it -- by far the most expensive step here --
     for every trial).
@@ -91,8 +93,12 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
     Returns
     -------
     baseline : ndarray, same shape as signal.
-    sigma : float, robust_sigma of (signal/baseline - 1), always
-        computed on the full-resolution residual.
+    sigma : ndarray, same shape as signal. Local robust noise level
+        (MAD-based) of (signal/baseline - 1), so a night whose noise
+        drifts (elevation, transparency, sky brightness) gets a sigma
+        that tracks it per baseline block instead of one number for the
+        whole series. Estimated per decimated block and interpolated
+        back to full resolution, mirroring the baseline.
     """
     time = np.asarray(time)
     signal = np.asarray(signal)
@@ -110,6 +116,11 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
 
     if stride == 1:
         baseline = median_filter(signal, size=window_samples, mode="reflect")
+        residual = signal / baseline - 1.0
+        # After detrending the residual is ~zero-median locally, so a
+        # rolling median of |residual| over the window is the local MAD.
+        sigma = 1.4826 * median_filter(np.abs(residual), size=window_samples,
+                                       mode="reflect")
     else:
         n_blocks = len(signal) // stride
         sig_blocks = signal[:n_blocks * stride].reshape(-1, stride).mean(axis=1)
@@ -118,7 +129,17 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
         baseline_dec = median_filter(sig_blocks, size=window_dec, mode="reflect")
         baseline = np.interp(time, t_blocks, baseline_dec)
 
-    sigma = robust_sigma(signal / baseline - 1.0)
+        residual = signal / baseline - 1.0
+        # Per-block MAD, then median-smoothed over the window (rejecting
+        # blocks contaminated by a dip/spike, same argument as the
+        # baseline) and interpolated back to full resolution.
+        res_blocks = residual[:n_blocks * stride].reshape(-1, stride)
+        block_mad = np.median(
+            np.abs(res_blocks - np.median(res_blocks, axis=1, keepdims=True)),
+            axis=1,
+        )
+        sigma_dec = 1.4826 * median_filter(block_mad, size=window_dec, mode="reflect")
+        sigma = np.interp(time, t_blocks, sigma_dec)
 
     return baseline, sigma
 
@@ -185,11 +206,14 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
 
     correlation = correlate(residual_data, residual_template, mode="valid", method="fft")
 
-    snr = correlation / (template_norm * sigma)
-
     # correlation[i] is the match for the window signal[i:i+M]; tag it
-    # at that window's center time.
+    # at that window's center time. sigma varies slowly (block/window
+    # scale >> template), so the local noise at each window's center is
+    # the right normaliser for that lag.
     center_offset = M // 2
+    sigma_center = sigma[center_offset:center_offset + len(correlation)]
+    snr = correlation / (template_norm * sigma_center)
+
     snr_time = time[center_offset:center_offset + len(snr)]
 
     return MatchedFilterResult(
@@ -245,8 +269,9 @@ def shape_veto_chi2(result: MatchedFilterResult, candidate_time_s: float) -> flo
     amplitude = float(np.sum(window * result.residual_template) / template_norm_sq)
 
     residuals = window - amplitude * result.residual_template
+    local_sigma = result.sigma[start:start + M]
     dof = M - 1
-    return float(np.sum(residuals**2) / result.sigma**2 / dof)
+    return float(np.sum((residuals / local_sigma)**2) / dof)
 
 
 def find_candidates(result: MatchedFilterResult, snr_threshold: float = 5.0,
