@@ -2,6 +2,7 @@
 
 Simulation and detection of stellar occultation diffraction patterns by sub-km
 Kuiper Belt Objects, for fast photometry with the MAGIC + LST-1 array.
+Authors: E. do Souto Espiñeira, T. Hassan, V. Pascual
 
 ## Features
 
