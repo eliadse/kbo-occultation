@@ -26,7 +26,6 @@ import re
 
 import numpy as np
 import matplotlib
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.signal import welch
 
@@ -34,11 +33,15 @@ from kbo_occultation import PACKAGE_DATA
 from kbo_occultation.photometry import LightCurve
 from kbo_occultation.filtering import highpass_lightcurve
 from kbo_occultation.dc_combine import despike_lightcurve_with_dc
+from kbo_occultation.detectability import bin_average
+from kbo_occultation.matched_filter import compute_baseline_and_sigma
 
 CHANNEL = "A"  # MAGIC-II
 DATA_DIR = f"{PACKAGE_DATA}/observations"
 DC_PKL = f"{DATA_DIR}/DCs/2025_12_16/dc_report.pkl"
-CUTOFF_HZ = 3.0
+CUTOFF_HZ = 3.5
+DISPLAY_STRIDE = 20  # thin the ~1.7M-point series for legible time-domain plots
+BLOCK_SAMPLES = 200  # samples per point in the binned mean+-error overlay
 
 MAG_B = {
     "HD-4335": 5.95, "HD-8837": 6.55, "HD-22353": 7.04,
@@ -69,8 +72,7 @@ def segmented_welch(time, signal, fs, nperseg_target=2**14, min_run_samples=1024
         weight_total += weight
     return freq_common, Pxx_accum / weight_total
 
-
-filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*.npz"))
+filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*20251216T*.npz"))
 raw_lcs = {}
 for fn in filenames:
     star = re.search(r"15min_(.*)_10002", fn).group(1)
@@ -106,5 +108,65 @@ for ax, star in zip(np.atleast_1d(axes1), order):
 axes1[-1].set_xlabel("Frequency (Hz)") if len(order) > 1 else ax.set_xlabel("Frequency (Hz)")
 fig1.tight_layout()
 fig1.savefig("noise_psd_highpass_2025_12_16.png", dpi=200)
+
+# ─── Time-domain grid ──────────────────────────────────────────────────
+# Left: raw counts (each star at its own absolute level, drifting over the
+# run). Right: the same series after the high-pass
+sl = slice(None, None, DISPLAY_STRIDE)
+fig2, axes2 = plt.subplots(len(order), 2, figsize=(14, 2.4 * len(order)), sharex=True)
+axes2 = np.atleast_2d(axes2)
+for row, star in zip(axes2, order):
+    ax_raw, ax_hp = row
+    lc = variants[star]["raw"]
+    hp = variants[star]["highpass"]
+    hpd = variants[star]["highpass+despike"]
+
+    t0 = lc.time.min()
+
+    ax_raw.plot(lc.time[sl] - t0, lc.signal[sl], ".", ms=0.8, color=colors["raw"])
+    tb, sb, eb = bin_average(lc.time, lc.signal, BLOCK_SAMPLES)
+    #base, sig = compute_baseline_and_sigma(lc.time, lc.signal, 0.01, 0.01)
+    # TODO use this method for the sigma that you want to compare, it makes no sense to 
+    # create another function when you want to compare the bin_average error with the 
+    # error from the compute_baseline_and_sigma. Change this in the following curves as well
+    ax_raw.errorbar(tb - t0, sb, yerr=robust_bin_sem(lc.signal, BLOCK_SAMPLES),
+                    fmt="none", ecolor="C2", elinewidth=1.2, capsize=2, zorder=4,
+                    label=r"robust (MAD)/$\sqrt{N}$")
+    ax_raw.errorbar(tb - t0, sb, yerr=eb, fmt=".", ms=2.5, color="k",
+                    ecolor="k", elinewidth=0.6, capsize=1, zorder=3,
+                    label=f"{BLOCK_SAMPLES}-sample mean, std/$\\sqrt{{N}}$")
+    ax_raw.set_ylabel(f"{star}\n(B={MAG_B[star]})\nraw counts")
+    ax_raw.grid(alpha=0.3)
+    ax_raw.legend(fontsize=7, loc="upper right", markerscale=4)
+
+    ax_hp.plot(hp.time[sl] - t0, (hp.signal)[sl],
+               ".", ms=0.8, color=colors["highpass"], label="highpass")
+    ax_hp.plot(hpd.time[sl] - t0, (hpd.signal)[sl],
+               ".", ms=0.8, color=colors["highpass+despike"], label="highpass+despike")
+    
+    tb, sb, eb = bin_average(hp.time, hp.signal, BLOCK_SAMPLES)
+
+    ax_hp.errorbar(tb - t0, sb, yerr=robust_bin_sem(hp.signal, BLOCK_SAMPLES),
+                   fmt="none", ecolor="C2", elinewidth=1.2, capsize=2, zorder=4,
+                   label=r"robust (MAD)/$\sqrt{N}$")
+    ax_hp.errorbar(tb - t0, sb, yerr=eb, fmt=".", ms=2.5, color="k",
+                   ecolor="k", elinewidth=0.6, capsize=1, zorder=3,
+                   label=f"{BLOCK_SAMPLES}-sample mean, std/$\\sqrt{{N}}$")
+    ax_hp.axhline(0, color="k", lw=0.6)
+    ax_hp.set_ylabel(r"$I$")
+    # robust y-limits so a few despike spikes don't flatten the rest
+    resid = hp.signal
+    ax_hp.set_ylim(*np.percentile(resid, [0.1, 99.9]))
+    ax_hp.grid(alpha=0.3)
+    ax_hp.legend(fontsize=7, loc="upper right", markerscale=6)
+
+axes2[0, 0].set_title("Raw light curve")
+axes2[0, 1].set_title(f"After high-pass ({CUTOFF_HZ} Hz) -- slow drift removed")
+axes2[-1, 0].set_xlabel("Time (s)")
+axes2[-1, 1].set_xlabel("Time (s)")
+fig2.tight_layout()
+fig2.savefig("highpass_timedomain_2025_12_16.png", dpi=140)
+
+plt.show()
 
 print(f"Saved: noise_psd_highpass_2025_12_16.png (cutoff={CUTOFF_HZ} Hz)")
