@@ -1,0 +1,73 @@
+observatory:
+  location:
+    lat: 28d45m42.1s
+    lon: -17d53m25.2s
+  name: MAGIC-LST
+  fixed_baselines: false
+  telescope_cabling_delays:
+  - 555e-09
+  - 0.
+  - 755e-09
+  telescope_diameters:
+  - 17
+  - 17
+  - 23
+  telescope_locations:
+# Cartesian coordinates in the reference frame of the first telescope considered
+# in this case M2
+# Old coordinates
+#  - - 0
+#    - 0
+#    - 0
+#  - - 47.9773
+#    - 70.5068
+#    - -1.1726
+#  - - -90.996
+#    - 26.241
+#    - -2.956
+  # New coordinates
+  - - 0
+    - 0
+    - 0
+  - - 48.1869
+    - 70.6576
+    - -1.1920
+#  - - -91.3991 # Used before Irene's optimization
+  - - -92.3461 # Optimized by I. Jiménez
+#    - 24.1460 # Used before Irene's optimization
+    - 23.3121  # Optimized by I. Jiménez
+#    - -2.1920 # This is the old value
+#    - 2.808  # To the geo coordinate, we add 23/2 - 17/2, plus a couple of meters more of structure.
+    - 2.4279 # Optimized by I. Jiménez
+  telescope_names:
+  - M2
+  - M1
+  - LST1
+  constants:
+    # Mirror area in square meters
+    area: [236, 236, 370]
+    # Quantum efficiency of photodetectors at the central wavelength of the optical filter
+    alpha_QE: [0.295, 0.295, 0.40]
+#    g: 0.236 # In 2019, we had a different optical filter
+    # g == total optical efficiency of the system.
+    # - Mirror reflectivity @400 nm: 90%
+    # - Photons not lost in halo: MAGIC 70% / LST 100%
+    # - Photons from the optical PSF falling within pixel FoV: MAGIC 70% / LST 100%
+    # - Optical filter transmission: 93%
+    # - Plexiglass + winston cones: 90%
+    # - Others: 80%
+
+    g: [0.304, 0.304, 0.6]
+    # Total bandwidth (Hz) of the system (including PMT, optical transmission, digitizer...)
+    b_v: [110e6, 110e6, 110e6]
+    # Normalized spectral distribution of the light after the filter (how "squared" it is).
+    # - You can test the optical filter performance given the entry angles of photons in
+    #   EO calculator:
+    sigma: [0.87, 0.87, 0.87]
+    # F^{-1} excess noise factor of the PMT
+    F: [1.15, 1.15, 1.15]
+    # Excess noise introduced by background light
+    bck_light_noise: [1, 1, 1]
+    elec_noise: [0.7, 0.7, 0.7]
+    cN: [1, 1, 1]
+    beta0: [1, 1, 1]
