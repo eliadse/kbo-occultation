@@ -78,7 +78,8 @@ class Instrument():
             VERITAS, VERITAS++, MAGIC.
         
         filter_type: str
-            Type of optical filter. Set to g
+            Type of optical filter. Default is None
+            Set to standard filters like g, u, r...
             Add "super_" to select hiperCAM filters
             or "MAGIC_" for the MAGIC filters like SII
 
@@ -229,6 +230,33 @@ class Instrument():
             'MAGIC_QE': 2020.2,
             'gaia_bp': 9.73
             }
+
+        # Photodetector excess-noise factor F (variance is inflated by F^2
+        # relative to pure Poisson shot noise). Values from MAGIC-LST.yml.
+        self.excess_noise_factor_per_telescope = {
+            'MAGIC': 1.15,
+            'LST': 1.15,
+            'MST-N': 1.15,
+            'pSCT': 1.15,
+            'SST-1M': 1.15,
+            'VERITAS': 1.15,
+            'VERITAS++': 1.15
+            }
+
+        # Electronic/readout noise, RMS photoelectrons per sample. From MAGIC-LST.yml.
+        self.elec_noise_per_telescope = {
+            'MAGIC': 0.7,
+            'LST': 0.7,
+            'MST-N': 0.7,
+            'pSCT': 0.7,
+            'SST-1M': 0.7,
+            'VERITAS': 0.7,
+            'VERITAS++': 0.7
+            }
+
+        # Observatory altitude (m) for the atmospheric scintillation term.
+        # Paranal ~2635 m, ORM/La Palma ~2200 m.
+        self.site_altitude_m = 2635.0 if self.site == 'Paranal' else 2200.0
 
         self.transmission = self.total_telescope_transmission()
 
@@ -509,9 +537,15 @@ class Instrument():
 
     def signal_to_noise_ratio(self, magnitude, time_binning, ntels = 1):
         # Simple ratio of the photons detected from the star to the photons from the
-        # night sky background magnitude at a given filter for the time binning used. 
+        # night sky background magnitude at a given filter for the time binning used.
         # Uniform sampling required!
         # relative_intensities is the y axis of the diffraction pattern, relative to 'magnitude'
+        #
+        # This is the pure Poisson shot-noise (star + NSB) baseline. For bright
+        # stars its fractional noise shrinks as ~1/sqrt(N_star) and the SNR is
+        # wildly optimistic. See realistic_signal_to_noise_ratio / noise_budget
+        # for the model that also includes the excess-noise factor, electronic
+        # noise and atmospheric scintillation.
         if not isinstance(time_binning, u.Quantity):
             raise Exception('Wrong input', 'Times needs to have units')
         num_star_photons = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
@@ -519,3 +553,110 @@ class Instrument():
         # Noise level is shot noise (NSB+STAR), divided by sqrt(n telescopes)
         noise_level = np.sqrt(num_star_photons+nsb_photons)/np.sqrt(ntels)
         return num_star_photons/noise_level
+
+    def noise_budget(self, magnitude, time_binning, ntels=1, airmass=1.0,
+                     excess_noise_factor=None, elec_noise_pe=None,
+                     aperture_diameter_m=None, scint_coeff=1.0,
+                     scintillation=True, moon=False):
+        """
+        Per-sample fractional-flux noise budget for a star of apparent
+        `magnitude` observed at cadence `time_binning`.
+
+        Unlike signal_to_noise_ratio (pure star+NSB shot noise), this combines
+        three physically-motivated terms in quadrature, all expressed as a
+        fraction of the star signal S (so they are directly comparable to the
+        measured std/mean of a real light curve):
+
+          - shot noise, inflated by the photodetector excess-noise factor F:
+                F**2 * (S + B) / S**2
+          - electronic/readout noise of `elec_noise_pe` RMS photoelectrons:
+                elec_noise_pe**2 / S**2
+          - atmospheric scintillation (Young 1967), magnitude-independent:
+                scint_coeff**2 * 10e-6 * D_cm**(-4/3) * X**3
+                                * exp(-2 h_obs / H) / (2 t_s)
+            with D the aperture diameter, X the airmass, h_obs the site
+            altitude and H = 8000 m the atmospheric scale height.
+
+        Every variance term is divided by `ntels`, matching
+        signal_to_noise_ratio. Note scintillation is only partially independent
+        between the ~100 m-separated MAGIC/LST dishes, so 1/ntels is a best
+        case for that term.
+
+        Parameters
+        ----------
+        magnitude : float
+            Apparent magnitude in the current filter (unfiltered if None).
+        time_binning : astropy.units.Quantity
+            Sampling cadence (needs time units).
+        ntels : int
+            Number of telescopes combined.
+        airmass : float
+            Airmass X = sec(z) of the target. Default 1.0 (zenith).
+        excess_noise_factor, elec_noise_pe, aperture_diameter_m : float, optional
+            Override the per-telescope defaults (excess_noise_factor_per_telescope,
+            elec_noise_per_telescope, and 2*sqrt(area/pi) respectively).
+        scint_coeff : float
+            Empirical scaling on the scintillation sigma (Young's coefficient
+            is for a median site; Osborn et al. 2015 find ~1.5 at La Palma).
+        scintillation : bool
+            Set False to drop the scintillation term entirely.
+        moon : bool
+            Passed to number_nsb_photons for the NSB level.
+
+        Returns
+        -------
+        dict with keys star_photons, nsb_photons, sigma_shot, sigma_elec,
+        sigma_scint and sigma_total (all sigmas in fractional-flux units).
+        """
+        if not isinstance(time_binning, u.Quantity):
+            raise Exception('Wrong input', 'Times needs to have units')
+
+        if excess_noise_factor is None:
+            excess_noise_factor = self.excess_noise_factor_per_telescope[self.telescope_type]
+        if elec_noise_pe is None:
+            elec_noise_pe = self.elec_noise_per_telescope[self.telescope_type]
+        if aperture_diameter_m is None:
+            area = self.mirror_area_per_telescope[self.telescope_type]
+            aperture_diameter_m = 2.0 * np.sqrt(area / np.pi)
+
+        S = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
+        B = self.number_nsb_photons(moon=moon) * time_binning.to('ns').value
+
+        # Fractional variances (relative to the star signal S), combined
+        # across telescopes as 1/ntels.
+        var_shot = excess_noise_factor**2 * (S + B) / S**2 / ntels
+        var_elec = elec_noise_pe**2 / S**2 / ntels
+
+        if scintillation:
+            t_s = time_binning.to('s').value
+            D_cm = aperture_diameter_m * 100.0
+            H = 8000.0  # atmospheric scale height (m)
+            var_scint = (scint_coeff**2 * 10e-6 * D_cm**(-4.0 / 3.0) *
+                         airmass**3 * np.exp(-2.0 * self.site_altitude_m / H) /
+                         (2.0 * t_s)) / ntels
+        else:
+            var_scint = 0.0
+
+        sigma_total = np.sqrt(var_shot + var_elec + var_scint)
+
+        return {
+            'star_photons': S,
+            'nsb_photons': B,
+            'sigma_shot': np.sqrt(var_shot),
+            'sigma_elec': np.sqrt(var_elec),
+            'sigma_scint': np.sqrt(var_scint),
+            'sigma_total': sigma_total,
+        }
+
+    def realistic_signal_to_noise_ratio(self, magnitude, time_binning, ntels=1, **kwargs):
+        """
+        Signal-to-noise ratio using the full noise_budget (star+NSB shot noise
+        with excess-noise factor, electronic noise and atmospheric
+        scintillation), i.e. SNR = 1 / sigma_total.
+
+        Same required arguments as signal_to_noise_ratio; extra keyword
+        arguments (airmass, scint_coeff, excess_noise_factor, elec_noise_pe,
+        aperture_diameter_m, scintillation, moon) are forwarded to noise_budget.
+        """
+        budget = self.noise_budget(magnitude, time_binning, ntels=ntels, **kwargs)
+        return 1.0 / budget['sigma_total']

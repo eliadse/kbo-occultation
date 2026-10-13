@@ -228,34 +228,51 @@ def is_detectable(intensity: np.ndarray, sigma: float, snr_threshold: float = 5.
     return snr >= snr_threshold
 
 
-def sigma_from_instrument(instrument, magnitude: float, time_binning, ntels: int = 1) -> float:
+def sigma_from_instrument(instrument, magnitude: float, time_binning, ntels: int = 1,
+                          realistic: bool = True, airmass: float = 1.0,
+                          scintillation: bool = True, **noise_kw) -> float:
     """
-    Convert an Instrument's photon-counting SNR (instruments.Instrument.signal_to_noise_ratio) 
-    into a per-sample fractional-flux noise sigma, for use as the `sigma` argument to
-    peak_snr / matched_filter_snr / is_detectable.
+    Convert an Instrument's SNR model into a per-sample fractional-flux noise
+    sigma, for use as the `sigma` argument to peak_snr / matched_filter_snr /
+    is_detectable.
 
-    sigma = 1 / SNR_photometric, where
-    SNR_photometric = star_photons / sqrt(star_photons + NSB_photons)
-    over `time_binning`.
+    By default (``realistic=True``) this uses instruments.Instrument.noise_budget,
+    whose sigma_total combines three terms in quadrature:
+        - star + NSB shot noise inflated by the photodetector excess-noise factor,
+        - electronic/readout noise,
+        - atmospheric scintillation (Young's formula, magnitude-independent).
+    This is what explains the floor seen in real bright-star light curves, where
+    the pure shot-noise model is wildly optimistic.
 
-    Caveat: this currently captures photon shot noise (star + NSB) only.
-    It does NOT yet include read noise, scintillation (Young's formula), or a systematic noise floor 
-    -- treat resulting SNR/detectability numbers as optimistic upper bounds, not final answers, 
-    until the full noise model is wired in.
+    Set ``realistic=False`` to recover the old shot-noise-only estimate,
+    sigma = 1 / SNR_photometric with
+    SNR_photometric = star_photons / sqrt(star_photons + NSB_photons). Treat
+    that as an optimistic upper bound.
 
     Parameters
     ----------
     instrument : instruments.Instrument
-        Configured with the telescope_type / filter_type / site you want to evaluate. 
-        instrument.signal_to_noise_ratio must be able to run
-        (i.e. its required reference data files must be present).
+        Configured with the telescope_type / filter_type / site you want to
+        evaluate. Its required reference data files must be present.
     magnitude : float
-        Apparent magnitude of the target star, in the instrument's current filter_type 
-        (or unfiltered response, if filter_type is None).
+        Apparent magnitude of the target star, in the instrument's current
+        filter_type (or unfiltered response, if filter_type is None).
     time_binning : astropy.units.Quantity
         Sampling cadence, e.g. ``524.288 * u.us``.
     ntels : int
-        Number of telescopes combined (as in Instrument.signal_to_noise_ratio).
+        Number of telescopes combined.
+    realistic : bool
+        Use the full noise_budget (True) or the shot-noise-only baseline (False).
+    airmass, scintillation :
+        Forwarded to noise_budget when ``realistic=True``.
+    **noise_kw :
+        Further noise_budget overrides (scint_coeff, excess_noise_factor,
+        elec_noise_pe, aperture_diameter_m, moon).
     """
+    if realistic:
+        budget = instrument.noise_budget(
+            magnitude, time_binning, ntels=ntels, airmass=airmass,
+            scintillation=scintillation, **noise_kw)
+        return float(budget['sigma_total'])
     snr_phot = instrument.signal_to_noise_ratio(magnitude, time_binning, ntels=ntels)
     return float(1.0 / snr_phot)
