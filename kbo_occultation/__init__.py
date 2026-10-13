@@ -98,6 +98,16 @@ from .upper_limits import (
     cumulative_density_upper_limit,
 )
 
+from .rates import (
+    event_rate,
+    kbo_velocity,
+    surface_density,
+    mean_diameter,
+    effective_shadow_width,
+    Q_1,
+    Q_L,
+)
+
 from .search import (
     ObservationSearchResult,
     search_observation,
