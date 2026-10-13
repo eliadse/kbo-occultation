@@ -23,7 +23,7 @@ from .coincidence import (AccidentalRateResult, CoincidenceEvent,
 from .detectability import spatial_to_time
 from .filtering import highpass_lightcurve
 from .injection_batch import build_search_template
-from .kinematics import ShadowKinematics, shadow_velocity_opposition
+from .kinematics import ShadowKinematics, shadow_velocity_opposition, EARTH_SEMIMAJOR_AXIS_AU
 from .matched_filter import (Candidate, compute_baseline_and_sigma,
                              find_candidates, sliding_matched_filter_snr)
 from .photometry import LightCurve
@@ -128,6 +128,10 @@ def search_observation(
         pickle. Only needed for the DC-based corrections.
     array : telescope positions + channel mapping (default ORM_ARRAY).
     template_radii_m : KBO radii to build search templates for.
+    distance_au : geocentric (Earth->KBO) distance, in AU. Sets the Fresnel
+        scale of the diffraction templates. Observing at opposition, the
+        heliocentric orbital radius driving the default shadow velocity is
+        distance_au + 1 AU (see kinematics module note).
     star, band, grid, numerics, response :
         Simulation configuration for the templates. Defaults: a
         sun-like point-ish star (0.01 mas), 300-650 nm, a 20 km grid.
@@ -160,7 +164,12 @@ def search_observation(
     numerics = numerics or NumericalConfig()
 
     if kinematics is None:
-        kinematics = ShadowKinematics(v_rel_mps=shadow_velocity_opposition(distance_au))
+        # distance_au is the geocentric (Earth->KBO) distance -- it is what sets
+        # the diffraction templates below (KBOConfig/Fresnel). We observe at
+        # opposition, so the heliocentric radius that sets the shadow velocity is
+        # distance_au + 1 AU (see kinematics module note on the two distances).
+        kinematics = ShadowKinematics(
+            v_rel_mps=shadow_velocity_opposition(distance_au + EARTH_SEMIMAJOR_AXIS_AU))
     elif not isinstance(kinematics, ShadowKinematics):
         kinematics = ShadowKinematics(v_rel_mps=float(kinematics))
     v_rel = kinematics.v_rel_mps

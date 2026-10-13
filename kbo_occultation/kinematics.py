@@ -23,6 +23,19 @@ from typing import Optional
 import numpy as np
 
 EARTH_ORBITAL_SPEED_MPS = 29_784.0  # mean heliocentric speed of the Earth
+EARTH_SEMIMAJOR_AXIS_AU = 1.0       # Sun->Earth distance
+
+# NOTE on the two distances. We intend to observe KBOs *at opposition* (Earth
+# between the Sun and the KBO). Two distances then appear and must not be
+# conflated:
+#   * heliocentric a  (Sun->KBO): sets the orbital / shadow velocity.
+#   * geocentric  Delta (Earth->KBO): sets the Fresnel scale, the projected
+#     stellar radius, and the angular event rate.
+# At opposition they differ by exactly the Earth's orbit:
+#       Delta = a - EARTH_SEMIMAJOR_AXIS_AU
+# That fixed 1 AU offset is *because* of the opposition geometry; away from
+# opposition the relation is more complex. Keep velocity code on `a` and
+# diffraction/geometry code on `Delta`.
 
 
 @dataclass
@@ -37,17 +50,22 @@ class ShadowKinematics:
     direction_enu: Optional[np.ndarray] = None
 
 
-def shadow_velocity_opposition(distance_au: float, opposition_angle_deg: float = 0.0) -> float:
+def shadow_velocity_opposition(heliocentric_au: float, opposition_angle_deg: float = 0.0) -> float:
     """
-    Retrograde shadow speed for a KBO on a circular ecliptic orbit at
-    ``distance_au``, observed at ``opposition_angle_deg`` from
+    Retrograde shadow speed for a KBO on a circular ecliptic orbit of
+    *heliocentric* radius ``heliocentric_au`` (= Sun->KBO distance a, NOT the
+    Earth->KBO geocentric distance), observed at ``opposition_angle_deg`` from
     opposition (Nihei et al. 2007, the convention used by TAOS):
 
         v_rel = v_E * (cos(eps) - a**-0.5 * sqrt(1 - a**-2 * sin(eps)**2))
 
     At opposition (eps = 0) and a = 43 AU this gives ~25.2 km/s.
+
+    Note the argument is heliocentric a. For an object observed at opposition
+    a geocentric distance Delta corresponds to a = Delta + EARTH_SEMIMAJOR_AXIS_AU
+    (see the module-level note on the two distances).
     """
-    a = float(distance_au)
+    a = float(heliocentric_au)
     eps = np.deg2rad(opposition_angle_deg)
     return EARTH_ORBITAL_SPEED_MPS * (
         np.cos(eps) - a**-0.5 * np.sqrt(1.0 - a**-2 * np.sin(eps)**2)

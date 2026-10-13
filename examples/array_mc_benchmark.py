@@ -42,7 +42,7 @@ DATA_DIR = f"{PACKAGE_DATA}/observations"
 DATA_FILE = f"{DATA_DIR}/Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz"
 STAR_NAME = "HD-17316"
 
-DISTANCE_AU = 43.0
+DISTANCE_AU = 43.0  # geocentric (Earth->KBO); sets the Fresnel-scale templates
 STAR = StarConfig(temperature_K=30000, angular_radius_mas=0.03)
 BAND = BandpassConfig(300.0, 650.0, 25)
 GRID = GridConfig(x_max_m=4000, n_x=800)
@@ -58,7 +58,8 @@ SEED = 2026
 # Injection/exposure velocity: the opposition value the benchmark run
 # emulates, so eps(r) carries over to on-ecliptic data (see
 # kinematics module docstring for the split convention).
-KIN = ShadowKinematics(v_rel_mps=shadow_velocity_opposition(DISTANCE_AU))
+# At opposition the heliocentric radius is the geocentric distance + 1 AU.
+KIN = ShadowKinematics(v_rel_mps=shadow_velocity_opposition(DISTANCE_AU + 1.0))
 
 method_specs = {
     "raw": lambda lc: lc,
