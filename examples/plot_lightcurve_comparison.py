@@ -33,7 +33,7 @@ from kbo_occultation import GridConfig, NumericalConfig, BandpassConfig, run_par
 from kbo_occultation.config import standard_sampling, standard_sample_duration
 from kbo_occultation.instruments import Instrument
 from kbo_occultation.detectability import (
-    spatial_to_time, resample_to_cadence, sigma_from_instrument,
+    spatial_to_time, resample_to_cadence, bin_average, sigma_from_instrument,
     spatial_power_spectrum, nyquist_frequency,
 )
 
@@ -51,10 +51,15 @@ CONFIGS = [
     ("LST", "MAGIC_SII"),
 ]
 
-RADII_M = [50, 100]
+#CONFIGS = [
+#    ("MAGIC", None),
+#    ("LST", None),
+#]
+
+RADII_M = [50, 80, 100, 150]
 STAR_ANGULAR_RADII_MAS = [0.03]
 DISTANCE_AU = 40.0
-REPRESENTATIVE_RADIUS_M = 80  # used for the noisy single-event figure; must be in RADII_M
+REPRESENTATIVE_RADIUS_M = 150  # used for the noisy single-event figure; must be in RADII_M
 
 grid = GridConfig(x_max_m=4000, n_x=800)
 numerics = NumericalConfig(n_r_grid=3000)
@@ -66,6 +71,7 @@ curves = {}
 # before spatial_to_time, rather than reconstructing it from t_s.
 spatial_curves = {}
 sigmas = {}
+instruments = {}
 
 for tel, filt in CONFIGS:
     inst = Instrument(telescope_type=tel, filter_type=filt, site=SITE)
@@ -88,6 +94,7 @@ for tel, filt in CONFIGS:
         keep_curves=True,
     )
 
+    instruments[label] = inst
     sigmas[label] = sigma_from_instrument(inst, STAR_MAGNITUDE, SAMPLING_DT_S * u.s)
     spatial_curves[label] = {p.radius_m: (p.x_m, p.intensity) for p in points}
     curves[label] = {
@@ -112,11 +119,7 @@ fig1.tight_layout()
 fig1.savefig("lightcurves_noiseless.png", dpi=200)
 
 # ─── Figure 1b: power spectrum of each curve, with Nyquist frequency ────
-# Computed on the native spatial grid x_m (spatial_curves), i.e. *before*
-# spatial_to_time/resample_to_cadence -- resampling can only remove
-# high-frequency content, never add it back, so measuring bandwidth after
-# resampling would just report the cadence already chosen instead of what
-# the physics needs.
+# Computed on original spatial grid x_m (spatial_curves), before averaging
 fig1b, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True)
 for ax, (label, per_radius) in zip(axes.flat, spatial_curves.items()):
     for radius_m, (x_m, I) in sorted(per_radius.items()):
@@ -140,21 +143,6 @@ fig1b.suptitle("Power spectrum of the diffraction pattern (dashed = estimated Ny
 fig1b.tight_layout()
 fig1b.savefig("lightcurves_power_spectrum.png", dpi=200)
 
-# ─── Figure 1: noiseless curves, all radii, one panel per config ────
-fig1, axes = plt.subplots(2, 2, figsize=(11, 8), sharex=True, sharey=True)
-for ax, (label, per_radius) in zip(axes.flat, curves.items()):
-    for radius_m, (t_s, I) in sorted(per_radius.items()):
-        ax.plot(t_s * 1e3, I, label=f"R={radius_m} m", lw=1.2)
-    ax.set_title(label)
-    ax.set_xlabel("Time (ms)")
-    ax.set_ylabel("Relative intensity")
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
-fig1.suptitle("Noiseless diffraction light curves, b=0 (full spatial-grid resolution)")
-fig1.tight_layout()
-fig1.savefig("lightcurves_noiseless.png", dpi=200)
-
-
 # ─── Figure 2: one radius, noiseless + a noise realization, all configs ──
 rng = np.random.default_rng(0)
 fig2, ax2 = plt.subplots(figsize=(8, 5))
@@ -168,7 +156,7 @@ for label, per_radius in curves.items():
     ax2.plot(t_binned * 1e3, noisy + offset, ".", ms=4, alpha=0.6, color=f"C{list(curves).index(label)}")
     ax2.plot(t_binned * 1e3, I_binned + offset, "-", lw=1.5, color=f"C{list(curves).index(label)}",
               label=f"{label} (sigma={sigma:.3f})")
-    offset += 0.4  # stack traces vertically so they don't overlap
+    offset += 0.02  # stack traces vertically so they don't overlap
 
 ax2.set_xlabel("Time (ms)")
 ax2.set_ylabel("Relative intensity (traces offset for clarity)")
@@ -176,6 +164,42 @@ ax2.set_title(f"R={REPRESENTATIVE_RADIUS_M} m, b=0 -- noiseless curve + one nois
 ax2.legend(fontsize=8)
 ax2.grid(alpha=0.3)
 fig2.tight_layout()
-fig2.savefig("lightcurves_with_noise.png", dpi=200)
+fig2.savefig(f"lightcurves_with_noise_{STAR_ANGULAR_RADII_MAS[0]}mas_star.png", dpi=200)
 
+# ─── Figure 3: one radius, noiseless + a noise realization, all configs ──
+# Noise is added at the curve's native (fine) sampling -- matching how the
+# instrument actually integrates light -- then bin_average collapses that
+# noisy, finely-sampled curve down to the real cadence, giving an honest
+# per-bin error bar (std of the raw samples in each bin / sqrt(n)) instead
+# of a single noise draw added after resampling.
+rng = np.random.default_rng(0)
+TELESCOPES = ["MAGIC", "LST"]
+fig3, axes3 = plt.subplots(len(TELESCOPES), 1, figsize=(8, 5 * len(TELESCOPES)), sharex=True)
+for ax3, tel in zip(axes3, TELESCOPES):
+    for label, per_radius in curves.items():
+        if not label.startswith(tel):
+            continue
+        t_s, I = per_radius[REPRESENTATIVE_RADIUS_M]
+        t_s, I = resample_to_cadence(t_s, I, t_s[1] - t_s[0])  # force uniform native grid
+        dt_native = t_s[1] - t_s[0]
+        n_samples = max(1, round(SAMPLING_DT_S / dt_native))
+
+        sigma_native = sigma_from_instrument(instruments[label], STAR_MAGNITUDE, dt_native * u.s)
+        noisy = I + rng.normal(0, sigma_native, size=I.shape)
+
+        t_binned, I_binned, sigma_binned = bin_average(t_s, noisy, n_samples)
+
+        color = f"C{list(curves).index(label)}"
+        ax3.errorbar(t_binned * 1e3, I_binned, yerr=sigma_binned, fmt=".", ms=4, alpha=0.6,
+                     color=color, ecolor=color, elinewidth=1, capsize=2)
+        ax3.plot(t_binned * 1e3, I_binned, "--", lw=1.5, color=color,
+                  label=f"{label} (sigma={sigma_binned.mean():.4f})")
+
+    ax3.set_ylabel("Relative intensity")
+    ax3.set_title(f"{tel}: Added noise curve. R={REPRESENTATIVE_RADIUS_M} m, b=0, {STAR_ANGULAR_RADII_MAS[0]}mas, {STAR_MAGNITUDE} magnitude star, 10 ms binning")
+    ax3.legend(fontsize=8)
+    ax3.grid(alpha=0.3)
+axes3[-1].set_xlabel("Time (ms)")
+fig3.tight_layout()
+fig3.savefig(f"lightcurves_with_noise_bars_{STAR_ANGULAR_RADII_MAS[0]}mas_star.png", dpi=200)
 plt.show()

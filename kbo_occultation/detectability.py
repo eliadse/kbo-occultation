@@ -53,21 +53,15 @@ def spatial_power_spectrum(x_m: np.ndarray, intensity: np.ndarray) -> Tuple[np.n
 def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mps: float,
                        power_threshold: float = 0.99) -> Tuple[float, float]:
     """
-    Estimate the Nyquist sampling frequency needed to resolve a simulated
-    diffraction light curve, from the pattern's own spatial frequency
-    content -- rather than assuming the Fresnel scale alone sets it.
+    Estimate the Nyquist sampling frequency needed to resolve a simulated diffraction 
+    light curve, from the pattern's own spatial frequency content. It must be called 
+    on the original pattern I(x_m), in distance units, before any resampling to the 
+    instruments data-taking cadence.
 
-    Must be called on the *spatial* pattern I(x_m), on its native uniform
-    grid, before any resampling to a fixed time cadence (resample_to_cadence
-    can only remove high-frequency content, never add it back, so measuring
-    bandwidth after resampling just tells you the cadence you already
-    chose, not what the physics needs).
-
-    The pattern's spatial bandwidth (the spatial frequency f_x below
-    which a fraction `power_threshold` of the cumulative spectral power
-    is contained) is converted to a temporal frequency via
-    f_t = f_x * shadow_velocity_mps, since x = v*t for a shadow crossing
-    the observer at constant velocity.
+    The pattern's spatial bandwidth (the spatial frequency f_x below which a fraction 
+    `power_threshold` of the cumulative spectral power is contained) is converted to a 
+    temporal frequency via f_t = f_x * shadow_velocity_mps, since x = v*t for a shadow 
+    crossing the observer at constant velocity.
 
     Parameters
     ----------
@@ -84,9 +78,9 @@ def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mp
     Returns
     -------
     f_nyquist_hz : float
-        Highest temporal frequency present in the pattern. Sample at
-        >= 2 * f_nyquist_hz to avoid aliasing (in practice, use a few x
-        margin -- power_threshold is a soft cutoff, not a hard band limit).
+        Highest temporal frequency present in the pattern. 
+        Sample at >= 2 * f_nyquist_hz to avoid aliasing. In practice you can use a few x 
+        margin, since the power_threshold is a soft cutoff and not a hard band limit.
     dt_max_s : float
         Corresponding maximum sampling interval, 1 / (2 * f_nyquist_hz).
     """
