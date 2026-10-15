@@ -36,6 +36,8 @@ data/observations
 *.bin
 *.pkl
 *.npz
+*.csv
+*.yaml
 
 outputs/
 tests/

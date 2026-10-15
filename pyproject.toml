@@ -14,7 +14,8 @@ dependencies = [
     "matplotlib",
     "scipy",
     "astropy",
-    "pandas"
+    "pandas",
+    "pyyaml"
 ]
 
 [project.optional-dependencies]
@@ -25,7 +26,7 @@ requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.package-data]
-"kbo_occultation.data" = ["**/*.txt", "**/*.dat", "**/*.fits", "**/*.csv"]
+"kbo_occultation.data" = ["**/*.txt", "**/*.dat", "**/*.fits", "**/*.csv", "**/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
