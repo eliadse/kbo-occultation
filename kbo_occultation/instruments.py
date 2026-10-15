@@ -258,12 +258,23 @@ class Instrument():
         # Paranal ~2635 m, ORM/La Palma ~2200 m.
         self.site_altitude_m = 2635.0 if self.site == 'Paranal' else 2200.0
 
+        # Airmass at which the atmospheric extinction is evaluated (1 = zenith).
+        # See set_airmass / noise_budget(extinction=True).
+        self.airmass = 1.0
+
         self.transmission = self.total_telescope_transmission()
 
     def print_parameters(self):
         print(f"Telescope type: {self.telescope_type}")
         print(f"Optical filter: {self.filter_type}")
         print(f"Telescope site: {self.site}")
+
+    def set_airmass(self, airmass):
+        """
+        Evaluate the atmospheric extinction (and hence every star photon count)
+        at this airmass instead of at the zenith: transmission = exp(-tau * X).
+        """
+        self.airmass = float(airmass)
 
     def set_filter(self, filter_type):
         """
@@ -373,7 +384,7 @@ class Instrument():
         f = interpolate.interp1d(data['wavelength(nm)'], data["100.000"])
         result = np.zeros_like(wavelength, dtype=float)
         mask = np.logical_and(wavelength >= np.min(data['wavelength(nm)']), wavelength <= np.max(data['wavelength(nm)']))
-        result[mask] = np.exp(-1 * f(wavelength[mask]))
+        result[mask] = np.exp(-self.airmass * f(wavelength[mask]))
         return result
 
     def total_transmission(self, wavelength=None):
@@ -557,7 +568,8 @@ class Instrument():
     def noise_budget(self, magnitude, time_binning, ntels=1, airmass=1.0,
                      excess_noise_factor=None, elec_noise_pe=None,
                      aperture_diameter_m=None, scint_coeff=1.0,
-                     scintillation=True, moon=False):
+                     scintillation=True, moon=False, extinction=False,
+                     throughput_factor=1.0):
         """
         Per-sample fractional-flux noise budget for a star of apparent
         `magnitude` observed at cadence `time_binning`.
@@ -602,6 +614,15 @@ class Instrument():
             Set False to drop the scintillation term entirely.
         moon : bool
             Passed to number_nsb_photons for the NSB level.
+        extinction : bool
+            If True, also evaluate the atmospheric extinction of the star light
+            at `airmass` (exp(-tau * X), see set_airmass). By default `airmass`
+            only enters the scintillation term and the star photons are
+            computed at the zenith, as before.
+        throughput_factor : float
+            Extra multiplicative efficiency applied to both the star and the
+            NSB photons, e.g. the fraction of mirror area left when some
+            panels are faulty, or a measured cloud transmission.
 
         Returns
         -------
@@ -619,8 +640,16 @@ class Instrument():
             area = self.mirror_area_per_telescope[self.telescope_type]
             aperture_diameter_m = 2.0 * np.sqrt(area / np.pi)
 
-        S = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
+        previous_airmass = self.airmass
+        if extinction:
+            self.set_airmass(airmass)
+        try:
+            S = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
+        finally:
+            self.set_airmass(previous_airmass)
         B = self.number_nsb_photons(moon=moon) * time_binning.to('ns').value
+        S = S * throughput_factor
+        B = B * throughput_factor
 
         # Fractional variances (relative to the star signal S), combined
         # across telescopes as 1/ntels.
@@ -656,7 +685,8 @@ class Instrument():
 
         Same required arguments as signal_to_noise_ratio; extra keyword
         arguments (airmass, scint_coeff, excess_noise_factor, elec_noise_pe,
-        aperture_diameter_m, scintillation, moon) are forwarded to noise_budget.
+        aperture_diameter_m, scintillation, moon, extinction, throughput_factor)
+        are forwarded to noise_budget.
         """
         budget = self.noise_budget(magnitude, time_binning, ntels=ntels, **kwargs)
         return 1.0 / budget['sigma_total']
