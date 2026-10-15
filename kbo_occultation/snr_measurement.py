@@ -38,8 +38,7 @@ from .photometry import LightCurve
 
 # Number of mirror panels per telescope, for the throughput lost to faulty
 # AMC panels (throughput_from_faulty_panels).
-# TODO(user): confirm the panel counts.
-N_PANELS = {"m1": 247, "m2": 247, "lst1": 198}
+N_PANELS = {"m1": 246, "m2": 246, "lst1": 198}
 
 
 def histogram_peak(data, which="last", n_bins=200, min_count=20):
@@ -114,6 +113,8 @@ def nsb_from_dc_histogram(dc_report_path: str, telescope: str, n_bins=100, min_c
     NSB level (in DC units) as the first peak of the histogram of the
     on-target pixel's DC over the whole report -- used for LST-1, whose
     background pixel reads abnormally high. Returns (level, 0.0).
+    If the camera was closed between observations, this will return ~0.
+    In that case use other method, like the background pixels or a dark patch.
     """
     _, v = load_dc_series(dc_report_path, telescope=telescope, pixel=0)
     return histogram_peak(v, which="first", n_bins=n_bins, min_count=min_count), 0.0
