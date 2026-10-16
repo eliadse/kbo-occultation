@@ -20,8 +20,12 @@ Report fields used (positions checked against real 2025/2026 lines):
   tracks WD. TK/TD/TS/RA/RS are kept with their raw codes.
 - ``PYRO-REPORT`` (pyrometer): sky temperature (K), cloudiness (%), lid flag,
   air temperature (C) -- the air temperature matches WEATHER TE.
-- ``AMC-REPORT``: the four integers after ``PANELS`` are kept raw
-  (``amc_panels_0..3``); their meaning is not documented in the report itself.
+- ``AMC-REPORT``: the four integers after ``PANELS`` are kept raw as
+  ``amc_panels_0..3`` = (enabled, undefined, adjusted OK, error) panels.
+  ``amc_panels_2`` is only non-zero while an adjustment is running, and then
+  ``amc_panels_2 + amc_panels_3 == amc_panels_0``; the error count stays
+  constant between adjustments. Panels not correctly focused = undefined +
+  error (``amc_unfocused_panels``).
 - ``STARG-REPORT`` (starguider): Zd/Az deviation, number of identified stars
   and sky brightness (Mars MReportStarguider layout).
 - ``LIDAR-REPORT``: only the ERROR_CODE is kept (the LIDAR was not
@@ -207,8 +211,12 @@ def summarize_conditions(reports: Dict[str, pd.DataFrame], t_start: float, t_sto
         summary["sky_temperature_K"] = pyro["sky_temperature_K"].mean()
     amc = window(reports.get("amc"))
     if amc is not None:
-        for k in range(4):
-            summary[f"amc_panels_{k}"] = int(amc[f"amc_panels_{k}"].median())
+        idle = amc[amc["amc_panels_2"] == 0]
+        if len(idle):
+            summary["amc_n_enabled"] = int(idle["amc_panels_0"].median())
+            summary["amc_n_undefined"] = int(idle["amc_panels_1"].median())
+            summary["amc_n_error"] = int(idle["amc_panels_3"].median())
+        summary["amc_n_unfocused"] = amc_unfocused_panels(amc, t_start, t_stop)
     starg = window(reports.get("starg"))
     if starg is not None:
         summary["starg_n_stars"] = starg["starg_n_stars"].mean()
@@ -219,6 +227,21 @@ def summarize_conditions(reports: Dict[str, pd.DataFrame], t_start: float, t_sto
     if lidar is not None:
         summary["lidar_operating"] = bool((lidar["lidar_error_code"] == 0).any())
     return summary
+
+
+def amc_unfocused_panels(amc: Optional[pd.DataFrame], t_start: float, t_stop: float) -> Optional[int]:
+    """
+    Number of mirror panels not correctly focused (undefined + error) in
+    [t_start, t_stop] (unix s): median over the AMC reports in the window,
+    skipping those taken while an adjustment was running. None if there are
+    no such reports.
+    """
+    if amc is None or amc.empty:
+        return None
+    sel = amc[(amc["time"] >= t_start) & (amc["time"] <= t_stop) & (amc["amc_panels_2"] == 0)]
+    if not len(sel):
+        return None
+    return int(round((sel["amc_panels_1"] + sel["amc_panels_3"]).median()))
 
 
 def site_location():

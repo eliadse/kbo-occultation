@@ -43,6 +43,9 @@ class Observation:
     good_time: Optional[List[float]]
     notes: Optional[str] = None
     manual: Dict = field(default_factory=dict)
+    # {telescope: number of panels not correctly focused}: the night's value,
+    # updated with this observation's own override.
+    faulty_mirrors: Dict = field(default_factory=dict)
 
     @property
     def is_star(self):
@@ -115,6 +118,7 @@ def load_observation_log(path=DEFAULT_LOG_PATH) -> ObservationLog:
 
     nights = {}
     for night_name, n in raw["nights"].items():
+        night_faulty = n.get("faulty_mirrors") or {}
         observations = {}
         for obs_name, o in n["observations"].items():
             observations[obs_name] = Observation(
@@ -130,6 +134,7 @@ def load_observation_log(path=DEFAULT_LOG_PATH) -> ObservationLog:
                 good_time=o.get("good_time"),
                 notes=o.get("notes"),
                 manual=o.get("manual") or {},
+                faulty_mirrors={**night_faulty, **(o.get("faulty_mirrors") or {})},
             )
         nights[night_name] = Night(
             name=night_name,
@@ -141,18 +146,12 @@ def load_observation_log(path=DEFAULT_LOG_PATH) -> ObservationLog:
             optical_filter=n.get("optical_filter"),
             daq=n.get("daq") or {},
             dark_run=n.get("dark_run"),
-            faulty_mirrors=n.get("faulty_mirrors") or {},
+            faulty_mirrors=night_faulty,
             elog_notes=n.get("elog_notes"),
             manual_conditions=n.get("manual_conditions") or {},
             observations=observations,
         )
     return ObservationLog(site=raw["site"], nights=nights)
-
-
-def _count_panels(entry):
-    if not entry:
-        return None
-    return len(entry.get("error_panels", [])) + len(entry.get("undefined_panels", []))
 
 
 def nights_table(log: ObservationLog) -> pd.DataFrame:
@@ -166,7 +165,7 @@ def nights_table(log: ObservationLog) -> pd.DataFrame:
             "n_stars": len(night.stars),
             "dark_run": night.dark_run,
             "cc_reports": ", ".join(night.cc_reports) or "none",
-            "faulty_panels": json.dumps({tel: _count_panels(v) for tel, v in night.faulty_mirrors.items()}),
+            "faulty_panels": json.dumps(night.faulty_mirrors),
             "elog_notes": night.elog_notes,
         })
     return pd.DataFrame(rows).set_index("night")

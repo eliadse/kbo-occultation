@@ -37,8 +37,11 @@ from .matched_filter import compute_baseline_and_sigma, robust_sigma
 from .photometry import LightCurve
 
 # Number of mirror panels per telescope, for the throughput lost to faulty
-# AMC panels (throughput_from_faulty_panels).
-N_PANELS = {"m1": 246, "m2": 246, "lst1": 198}
+# AMC panels (throughput_from_faulty_panels). MAGIC: both telescopes use
+# magic_spysii's mirror-magic2-nopsf_experimental_clean.def (see
+# magic_spysii/reflector.py), 247 facets of 0.985 m side = 239.6 m^2,
+# consistent with instruments.mirror_area_per_telescope['MAGIC'] = 240.
+N_PANELS = {"m1": 247, "m2": 247, "lst1": 198}
 
 
 def histogram_peak(data, which="last", n_bins=200, min_count=20):
@@ -207,16 +210,15 @@ def extinction_factor(zd_deg, k_mag):
     return 10 ** (0.4 * k_mag * (airmass_from_zd(zd_deg) - 1.0))
 
 
-def throughput_from_faulty_panels(faulty_mirrors_entry, telescope: str) -> float:
+def throughput_from_faulty_panels(n_unfocused, telescope: str) -> float:
     """
-    Fraction of mirror area left given an observation-log ``faulty_mirrors``
-    entry ({error_panels: [...], undefined_panels: [...]}); 1.0 if unknown.
+    Fraction of mirror area left given the number of panels not correctly
+    focused (an observation-log ``faulty_mirrors[telescope]`` value; all
+    panels have the same area); 1.0 if unknown (None).
     """
-    if not faulty_mirrors_entry:
+    if n_unfocused is None:
         return 1.0
-    n_bad = len(faulty_mirrors_entry.get("error_panels", [])) + \
-        len(faulty_mirrors_entry.get("undefined_panels", []))
-    return 1.0 - n_bad / N_PANELS[telescope]
+    return 1.0 - n_unfocused / N_PANELS[telescope]
 
 
 def band_noise_rms(lc: LightCurve, bands: dict, nperseg: int = 4096) -> dict:

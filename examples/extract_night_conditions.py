@@ -3,13 +3,15 @@ Condense each night's MAGIC CC ``.rep`` reports (weather, pyrometer, AMC,
 starguider, pointing; ~300 MB per telescope) into small CSVs under
 ``data/observations/conditions/<night>/``, restricted to the night's
 observing span +- PAD_S. The SNR study notebook reads only these caches.
+Also prints, per run, the number of mirror panels not correctly focused
+(AMC undefined + error), to copy into the log's ``faulty_mirrors``.
 
 Re-run after adding a night (or its .rep files) to observation_log.yaml.
 """
 
 import os
 
-from kbo_occultation.aux_reports import read_cc_reports, save_conditions
+from kbo_occultation.aux_reports import amc_unfocused_panels, read_cc_reports, save_conditions
 from kbo_occultation.observation_log import load_observation_log
 
 PAD_S = 1800.0
@@ -32,6 +34,10 @@ def main():
             save_conditions(reports, night.conditions_dir, telescope)
             counts = ", ".join(f"{k}={len(v)}" for k, v in reports.items())
             print(f"{night.name} {telescope}: {counts}")
+            for obs in night.observations.values():
+                if os.path.exists(obs.path):
+                    n_bad = amc_unfocused_panels(reports["amc"], *obs.time_span())
+                    print(f"    {obs.name}: {n_bad} unfocused panels")
 
 
 if __name__ == "__main__":
