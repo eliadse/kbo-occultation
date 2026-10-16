@@ -67,6 +67,7 @@ class Observation:
     faulty_mirrors: Dict = field(default_factory=dict)
     # Channels recording star light (the night's ``channels``).
     channels: List[str] = field(default_factory=list)
+    simbad_id: Optional[str] = None
 
     @property
     def is_star(self):
@@ -189,61 +190,206 @@ class ObservationLog:
         raise ObservationLogError(f"{path!r} is not in the observation log")
 
 
+def _base_dir(log_path):
+    return os.environ.get("KBO_OBSERVATIONS_DIR") or os.path.dirname(os.path.abspath(log_path))
+
+
+def _cc_root(raw):
+    root = os.environ.get("KBO_CC_REPORTS_ROOT") or (raw.get("paths") or {}).get("cc_reports_root")
+    return os.path.expanduser(root) if root else None
+
+
+def parse_night(night_name, n, base_dir, cc_root) -> Night:
+    """One ``nights:`` entry of the YAML (a plain or ruamel mapping) as a Night."""
+    night_faulty = dict(n.get("faulty_mirrors") or {})
+    channels = list(n.get("channels") or [])
+    observations = {}
+    for obs_name, o in (n.get("observations") or {}).items():
+        observations[obs_name] = Observation(
+            name=obs_name,
+            night=night_name,
+            path=_resolve(o["file"], base_dir),
+            type=o["type"],
+            ra_deg=o.get("ra_deg"),
+            dec_deg=o.get("dec_deg"),
+            mag_B=o.get("mag_B"),
+            mag_V=o.get("mag_V"),
+            spectral_type=o.get("spectral_type"),
+            good_time=o.get("good_time"),
+            notes=o.get("notes"),
+            manual=dict(o.get("manual") or {}),
+            faulty_mirrors={**night_faulty, **(o.get("faulty_mirrors") or {})},
+            channels=channels,
+            simbad_id=o.get("simbad_id"),
+        )
+    return Night(
+        name=night_name,
+        date=n["date"],
+        dc_report=_resolve(n.get("dc_report"), base_dir),
+        cc_reports={tel: _resolve(p, cc_root) for tel, p in (n.get("cc_reports") or {}).items()
+                    if p is not None},
+        conditions_dir=_resolve(n.get("conditions_dir"), base_dir),
+        channels=channels,
+        optical_filter=n.get("optical_filter"),
+        daq=dict(n.get("daq") or {}),
+        dark_run=n.get("dark_run"),
+        faulty_mirrors=night_faulty,
+        elog_notes=n.get("elog_notes"),
+        manual_conditions=dict(n.get("manual_conditions") or {}),
+        observations=observations,
+    )
+
+
 def load_observation_log(path=DEFAULT_LOG_PATH) -> ObservationLog:
     with open(path) as f:
         raw = yaml.safe_load(f)
-    base_dir = os.environ.get("KBO_OBSERVATIONS_DIR") or os.path.dirname(os.path.abspath(path))
-    paths = raw.get("paths") or {}
-    cc_root = os.environ.get("KBO_CC_REPORTS_ROOT") or paths.get("cc_reports_root")
-    cc_root = os.path.expanduser(cc_root) if cc_root else None
-
-    nights = {}
-    for night_name, n in raw["nights"].items():
-        night_faulty = n.get("faulty_mirrors") or {}
-        channels = n["channels"]
-        observations = {}
-        for obs_name, o in (n.get("observations") or {}).items():
-            observations[obs_name] = Observation(
-                name=obs_name,
-                night=night_name,
-                path=_resolve(o["file"], base_dir),
-                type=o["type"],
-                ra_deg=o.get("ra_deg"),
-                dec_deg=o.get("dec_deg"),
-                mag_B=o.get("mag_B"),
-                mag_V=o.get("mag_V"),
-                spectral_type=o.get("spectral_type"),
-                good_time=o.get("good_time"),
-                notes=o.get("notes"),
-                manual=o.get("manual") or {},
-                faulty_mirrors={**night_faulty, **(o.get("faulty_mirrors") or {})},
-                channels=channels,
-            )
-        nights[night_name] = Night(
-            name=night_name,
-            date=n["date"],
-            dc_report=_resolve(n.get("dc_report"), base_dir),
-            cc_reports={tel: _resolve(p, cc_root) for tel, p in (n.get("cc_reports") or {}).items()
-                        if p is not None},
-            conditions_dir=_resolve(n.get("conditions_dir"), base_dir),
-            channels=channels,
-            optical_filter=n.get("optical_filter"),
-            daq=n.get("daq") or {},
-            dark_run=n.get("dark_run"),
-            faulty_mirrors=night_faulty,
-            elog_notes=n.get("elog_notes"),
-            manual_conditions=n.get("manual_conditions") or {},
-            observations=observations,
-        )
+    base_dir, cc_root = _base_dir(path), _cc_root(raw)
+    nights = {name: parse_night(name, n, base_dir, cc_root) for name, n in (raw.get("nights") or {}).items()}
     return ObservationLog(site=raw["site"], nights=nights, path=os.path.abspath(path),
                           observations_dir=base_dir, cc_reports_root=cc_root)
+
+
+# ───────────────────────────────────────────────────────────
+# Editing the YAML in place (used by observations.prepare)
+# ───────────────────────────────────────────────────────────
+
+def _ruamel():
+    from ruamel.yaml import YAML
+
+    y = YAML()
+    y.preserve_quotes = True
+    y.indent(mapping=2, sequence=4, offset=2)
+    y.width = 4096                       # never fold the long file names
+    y.representer.add_representer(
+        type(None), lambda r, d: r.represent_scalar("tag:yaml.org,2002:null", "null"))
+    return y
+
+
+class LogFile:
+    """
+    observation_log.yaml loaded for editing: a comment-preserving (ruamel)
+    round trip, so the header and inline comments survive ``save()``.
+    """
+
+    def __init__(self, path=DEFAULT_LOG_PATH):
+        self.path = os.path.abspath(path)
+        self._yaml = _ruamel()
+        with open(self.path) as f:
+            self.data = self._yaml.load(f)
+        if self.data.get("nights") is None:
+            self.data["nights"] = self._yaml.load("{}")
+
+    @property
+    def base_dir(self):
+        return _base_dir(self.path)
+
+    @property
+    def cc_root(self):
+        return _cc_root(self.data)
+
+    @property
+    def nights(self):
+        return self.data["nights"]
+
+    def night(self, name) -> Night:
+        return parse_night(name, self.nights[name], self.base_dir, self.cc_root)
+
+    def dump(self) -> str:
+        import io
+
+        buf = io.StringIO()
+        self._yaml.dump(self.data, buf)
+        return buf.getvalue()
+
+    def append_night(self, text):
+        """
+        Add a night from its YAML text (``  "date":`` block indented under
+        ``nights:``). Appended as text, so its layout and comments are exactly
+        as written; ``nights`` must be the last top-level key.
+        """
+        if list(self.data)[-1] != "nights":
+            raise ValueError(f"{self.path}: `nights:` must be the last top-level key to append a night")
+        current = self.dump().rstrip("\n")
+        sep = "\n\n" if self.nights else "\n"
+        if not self.nights:   # `nights: {}` -> `nights:`
+            current = current[:current.rindex("{}")].rstrip() if current.endswith("{}") else current
+        self.data = self._yaml.load(current + sep + text)
+
+    def load_mapping(self, text):
+        """A ruamel mapping parsed from YAML text, e.g. an observation entry to append_key()."""
+        return self._yaml.load(text)
+
+    def save(self):
+        text = self.dump()
+        with open(self.path, "w") as f:
+            f.write(text)
+
+
+def _render(value):
+    if value is None:
+        return "null"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(map(str, value)) + "]"
+    return str(value)
+
+
+def _eol_column(cm, key, value):
+    """Column two spaces after ``value`` on ``key``'s line, if the key's position is known (else 0)."""
+    pos = getattr(getattr(cm, "lc", None), "data", {}).get(key)
+    return pos[3] + len(_render(value)) + 2 if pos else 0
+
+
+def set_value(cm, key, value, comment=None):
+    """
+    Set ``cm[key]`` (an existing key) keeping the comment lines that follow it,
+    and replace its end-of-line comment by ``# comment`` (or remove it).
+    """
+    cm[key] = value
+    tok = cm.ca.items.get(key)
+    if tok is not None and len(tok) > 2 and tok[2] is not None:
+        _, _, rest = tok[2].value.partition("\n")
+        tok[2].value = (f"# {comment}" if comment else "") + "\n" + rest
+        tok[2].column = _eol_column(cm, key, value)
+    elif comment:
+        cm.yaml_add_eol_comment(f"# {comment}", key, column=_eol_column(cm, key, value))
+
+
+def append_key(cm, key, value, comment=None):
+    """
+    Add a new last key to ``cm``, moving the blank lines / comments that
+    trailed the previous last key after the new one.
+    """
+    trailing = None
+    if len(cm):
+        last = list(cm)[-1]
+        tok = cm.ca.items.get(last)
+        if tok is not None and len(tok) > 2 and tok[2] is not None:
+            eol, _, trailing = tok[2].value.partition("\n")
+            tok[2].value = eol + "\n"
+    cm[key] = value
+    if comment:
+        cm.yaml_add_eol_comment(f"# {comment}", key, column=0)
+    if trailing:
+        tok = cm.ca.items.get(key)
+        if tok is not None and len(tok) > 2 and tok[2] is not None:
+            tok[2].value = tok[2].value.rstrip("\n") + "\n" + trailing
+        else:
+            from ruamel.yaml.error import CommentMark
+            from ruamel.yaml.tokens import CommentToken
+            cm.ca.items[key] = [None, None, CommentToken("\n" + trailing, CommentMark(0), None), None]
+
+
+# Telescopes whose AMC status is not in the MAGIC CC reports: a null
+# faulty_mirrors value for them is expected, not something to fill in.
+UNAVAILABLE_FAULTY_MIRRORS = {"lst1"}
 
 
 def validate(night: Night) -> List[str]:
     """
     Everything still missing for ``night``, one line each: files that are not
-    on disk, and log fields that are null (to fill from SIMBAD, the eLog,
-    ``kbo-night prepare`` output, ...).
+    on disk, and log fields that are null. After ``kbo-night prepare`` these
+    are normally only the manual ones (good_time, elog_notes) and whatever
+    the automatic sources could not provide.
     """
     problems = []
     for obs in night.observations.values():
@@ -269,7 +415,8 @@ def validate(night: Night) -> List[str]:
         problems.append(f"conditions: not extracted yet (run `kbo-night prepare {night.name}`)")
     if night.dark_run and night.dark_run not in night.observations:
         problems.append(f"dark_run: {night.dark_run!r} is not one of the night's observations")
-    problems += [f"faulty_mirrors.{t}: null" for t, v in night.faulty_mirrors.items() if v is None]
+    problems += [f"faulty_mirrors.{t}: null" for t, v in night.faulty_mirrors.items()
+                 if v is None and t not in UNAVAILABLE_FAULTY_MIRRORS]
     problems += [f"manual_conditions.{k}: null" for k, v in night.manual_conditions.items() if v is None]
     if night.elog_notes is None:
         problems.append("elog_notes: null")

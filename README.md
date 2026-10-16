@@ -12,7 +12,7 @@ four tasks:
 
 | I want to… | Start here |
 |---|---|
-| Add a new observation night | [`kbo-night scaffold` / `prepare`](#adding-a-new-night) |
+| Add a new observation night | [`kbo-night prepare`](#adding-a-new-night) |
 | Measure the SNR of real observations and compare it with theory | [`kbo-night snr`](#measuring-the-snr-of-real-observations) |
 | Simulate an occultation light curve or a theoretical SNR | [`compute_lightcurve`, `Instrument`](#simulating-light-curves-and-theoretical-snr) |
 | Search a recording for occultations | [`search_observation`](#searching-an-observation-for-occultations) |
@@ -23,7 +23,7 @@ four tasks:
 ## Installation
 
 Requires Python 3.9+ and the scientific-Python stack (numpy, scipy, astropy,
-matplotlib, pandas, pyyaml — installed automatically).
+matplotlib, pandas, pyyaml, ruamel.yaml, astroquery — installed automatically).
 
 ```bash
 git clone <repo-url>
@@ -64,7 +64,8 @@ notebooks/
 | `simulation.detectability` | spatial → time conversion, binning, SNR of an aligned dip |
 | `simulation.kinematics` | shadow velocity of a KBO (`ShadowKinematics`) |
 | `observations.log` | `load_observation_log`: the observation log (nights, stars, good times, mirrors) and each observation's light curves |
-| `observations.prepare` | `scaffold_night`, `prepare_night`: from raw `.bin` files to analysis-ready caches |
+| `observations.prepare` | `prepare_night`: writes a night's log entry (filenames, data, SIMBAD, CC/AMC reports) and builds its caches and conditions |
+| `observations.simbad` | star coordinates, magnitudes and spectral types from SIMBAD |
 | `observations.photometry` | `LightCurve`, `.npz` pre-processing |
 | `observations.io` | stat-binary file reader |
 | `observations.filtering` | high-pass filters, outlier removal |
@@ -109,55 +110,57 @@ channel plus `t0`/`dt`/`n`.
 ## Adding a new night
 
 1. **Copy the files.** Put the `Spectrum*.bin` files in `kbo_occultation/data/observations/`
-   and the DC report in `DCs/<YYYY_MM_DD>/dc_report.pkl`. Put the CC `.rep` files anywhere
-   under `cc_reports_root`.
+   and the DC report in `DCs/<YYYY_MM_DD>/dc_report.pkl`. Put the CC `.rep` files
+   (`CC_M1_<YYYY_MM_DD>_*.rep`, `CC_M2_…`) anywhere under `cc_reports_root`.
 
-2. **Generate the log entry.**
-
-   ```bash
-   kbo-night scaffold 2026-10-20
-   ```
-
-   This prints a ready-to-paste YAML block for the night. It covers every
-   `Spectrum*.bin` whose filename timestamp falls between 12:00 UTC on that date and
-   12:00 UTC the next day. Observation names, files, DAQ settings, dark runs (names
-   containing "dark") and the DC report path are filled in from the filenames. Every
-   other field is `null  # TODO(user)`. Paste the block under `nights:` in
-   `observation_log.yaml`.
-
-3. **Fill in what only you know.** Get coordinates, B/V magnitudes and spectral types
-   from SIMBAD. Add the CC report paths, and remove channels that recorded no star
-   light. The fields:
-
-   | Field | Meaning |
-   |---|---|
-   | `channels` | DAQ channels that recorded star light, e.g. `[A]` if only MAGIC-2 was connected |
-   | `dc_report`, `cc_reports` | DC pickle (relative to the data dir); CC `.rep` per telescope (`m1`, `m2`; relative to `cc_reports_root`) |
-   | `dark_run` | name of the night's dark run / dark patch (NSB reference); `null` if none |
-   | `faulty_mirrors` | `{m1: n, m2: n, lst1: n}` panels not correctly focused (AMC undefined + error); an observation's own `faulty_mirrors` overrides the night's |
-   | `type` | `star` or `dark` |
-   | `ra_deg`, `dec_deg`, `mag_B`, `mag_V`, `spectral_type` | from SIMBAD (ICRS degrees) |
-   | `good_time` | `[start, stop]` seconds from the start of the run to use for the SNR; `null` = whole run |
-   | `elog_notes`, `notes`, `manual`, `manual_conditions` | free text, and manual overrides of measured conditions |
-
-   Zd, airmass and moon are **not** entered by hand. They are computed from the
-   coordinates and the run times.
-
-4. **Prepare the night.**
+2. **Prepare the night.**
 
    ```bash
    kbo-night prepare 2026-10-20
    ```
 
-   This builds the missing `.npz` caches, condenses the CC reports into
-   `conditions/2026-10-20/`, prints the AMC unfocused-panel count of each run (copy
-   these into `faulty_mirrors`), and lists everything still missing from the log.
-   Existing caches are kept; `--force` rebuilds them, e.g. after changing the
-   outlier-removal parameters. Re-run it until the missing list only contains things
-   you know to be unavailable.
+   This writes the night into `observation_log.yaml` itself; nothing has to be copied
+   or pasted. It picks up every `Spectrum*.bin` whose filename timestamp falls between
+   12:00 UTC on that date and 12:00 UTC the next day, then:
+   - builds the `.npz` caches;
+   - condenses the CC reports into `conditions/2026-10-20/`;
+   - fills in every field it can derive (table below);
+   - prints what it filled and what is still missing.
 
-5. **Check and measure.** `kbo-night list` shows every night's status, and
-   `kbo-night snr 2026-10-20` gives the SNR table (next section).
+   Each filled value carries a comment naming its source (`# SIMBAD`, `# CC target`,
+   `# AMC`, `# data`, `# found`). It needs network access for SIMBAD; if SIMBAD can't
+   be reached, those fields stay `null` and the next run fills them.
+
+3. **Add the manual information (optional).** Edit the night in the log: `good_time`
+   windows (`null` = use the whole run), `elog_notes`, `notes`, and `optical_filter`
+   if a filter was mounted.
+
+4. **Measure.** `kbo-night snr 2026-10-20` gives the SNR table (next section).
+   `kbo-night list` shows every night's status.
+
+| Field | Filled from |
+|---|---|
+| observations, `file`, `type`, `dark_run`, `daq` | the `.bin` filenames (`type: dark` for names containing "dark") |
+| `dc_report` | `DCs/<YYYY_MM_DD>/dc_report.pkl`, if present |
+| `cc_reports` | `CC_M<n>_<YYYY_MM_DD>_*.rep` under `cc_reports_root` |
+| `channels` | the data: a channel at the electronic pedestal (≈0.4–0.7 variance units, the same in every run) recorded no light and is left out |
+| star `ra_deg`, `dec_deg`, `mag_B`, `mag_V`, `spectral_type`, `simbad_id` | SIMBAD, by the name in the filename (`HD-4335` → `HD 4335`); a warning is printed if the position is > 0.5° from the CC target |
+| dark-run `ra_deg`, `dec_deg` | the CC-REPORT target RA/Dec during the run |
+| `faulty_mirrors` | AMC panels not correctly focused (undefined + error): the night's median, plus a per-run `faulty_mirrors` where a run differs. LST-1 is not in the MAGIC CC reports. |
+| `good_time`, `elog_notes`, `notes`, `optical_filter`, `manual`, `manual_conditions` | you (optional) |
+
+Zd, airmass and moon are not stored in the log; they are computed from the
+coordinates and the run times.
+
+**Re-running `prepare`** is always safe:
+- It only fills empty (`null`) fields. A value you set or corrected by hand is kept.
+- Runs that appear later (new `.bin` files of that night) are added to the entry.
+- `--refresh` re-derives and overwrites the automatic fields; it never touches the
+  manual ones.
+- `--dry-run` prints the changes without writing the log.
+- `--force` rebuilds the caches and conditions, e.g. after changing the
+  outlier-removal parameters.
+- `kbo-night prepare` with no date re-checks every night in the log.
 
 ---
 

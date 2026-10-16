@@ -2,8 +2,8 @@
 ``kbo-night``: take an observation night from raw files to an SNR table.
 
     kbo-night list                       nights in the log and what is ready / missing
-    kbo-night scaffold 2026-10-20        YAML block for a new night, to paste into the log
-    kbo-night prepare 2026-10-20         .npz caches + CC conditions + AMC panels + checks
+    kbo-night prepare 2026-10-20         write/complete the night in the log (SIMBAD, CC, AMC,
+                                         channels), build .npz caches + conditions, list what's missing
     kbo-night conditions 2026-10-20      observing conditions per observation
     kbo-night snr 2026-10-20 --plot      measured vs theoretical SNR -> outputs/snr/
 
@@ -18,8 +18,7 @@ import warnings
 
 import pandas as pd
 
-from .observations.log import (DEFAULT_LOG_PATH, OBSERVATIONS_DIR, ObservationLogError, load_observation_log,
-                               nights_table, validate)
+from .observations.log import DEFAULT_LOG_PATH, ObservationLogError, load_observation_log, nights_table, validate
 
 
 def _load(args):
@@ -50,21 +49,15 @@ def cmd_list(args):
     print(f"\nlog: {log.path}\n`kbo-night prepare NIGHT` lists the missing items of a night.")
 
 
-def cmd_scaffold(args):
-    from .observations.prepare import scaffold_night
-
-    print(scaffold_night(args.date, args.data_dir), end="")
-    print(f"# Paste under `nights:` in {args.log}, then fill the TODOs "
-          f"(coordinates, B/V, spectral type from SIMBAD) and run `kbo-night prepare {args.date}`.",
-          file=sys.stderr)
-
-
 def cmd_prepare(args):
     from .observations.prepare import prepare_night
 
-    log = _load(args)
-    for night in log.select(args.nights):
-        prepare_night(night, force=args.force, pad_s=args.pad)
+    dates = args.nights
+    if not dates or dates == ["all"]:
+        dates = list(_load(args).nights)
+    for date in dates:
+        prepare_night(date, log_path=args.log, force=args.force, refresh=args.refresh,
+                      dry_run=args.dry_run, pad_s=args.pad)
 
 
 def cmd_conditions(args):
@@ -107,14 +100,12 @@ def build_parser():
     s = sub.add_parser("list", help="nights in the log and their status")
     s.set_defaults(func=cmd_list)
 
-    s = sub.add_parser("scaffold", help="print the YAML block for a new night")
-    s.add_argument("date", help="night date YYYY-MM-DD (runs from noon UTC to noon UTC next day)")
-    s.add_argument("--data-dir", default=OBSERVATIONS_DIR, help="where the Spectrum*.bin files are")
-    s.set_defaults(func=cmd_scaffold)
-
-    s = sub.add_parser("prepare", help="build caches, extract conditions, check the log")
-    s.add_argument("nights", nargs="*")
+    s = sub.add_parser("prepare", help="create/complete nights in the log, build caches and conditions")
+    s.add_argument("nights", nargs="*", help="night dates YYYY-MM-DD (new or already in the log); none = all")
     s.add_argument("--force", action="store_true", help="rebuild existing caches / conditions")
+    s.add_argument("--refresh", action="store_true",
+                   help="overwrite automatic fields already set in the log (manual fields are never touched)")
+    s.add_argument("--dry-run", action="store_true", help="print the log changes without writing them")
     s.add_argument("--pad", type=float, default=1800.0, help="CC window padding around the runs [s]")
     s.set_defaults(func=cmd_prepare)
 

@@ -6,6 +6,12 @@
 # kbo_occultation.observations.log; rendered as tables in
 # notebooks/snr_study.ipynb and by `kbo-night`.
 #
+# Nights are written and completed by `kbo-night prepare <YYYY-MM-DD>`: it
+# fills every field it can derive (filenames, data, SIMBAD, CC/AMC reports),
+# marking each with a comment naming the source, and never overwrites a value
+# that is already set (unless --refresh). Edit freely: your values are kept.
+# Only good_time, elog_notes, notes, optical_filter and manual* are yours to add.
+#
 # Conventions
 # - file / dc_report / conditions_dir are relative to this file's directory
 #   (or to $KBO_OBSERVATIONS_DIR if set) unless absolute.
@@ -14,8 +20,8 @@
 #   `kbo-night prepare <night>` condenses them into conditions/<night>/*.csv.
 # - good_time: [start, stop] in seconds relative to the first sample of the
 #   run; null = use the whole run.
-# - Coordinates (ICRS, deg), B/V magnitudes and spectral types: SIMBAD,
-#   queried 2026-10-14.
+# - Coordinates (ICRS, deg), B/V magnitudes and spectral types: SIMBAD (stars),
+#   CC-REPORT target RA/Dec (dark runs).
 # - Zd/airmass/moon are NOT typed here: they are computed from the coordinates
 #   and the run's time span (cc_reports.pointing_conditions) and cross-checked
 #   against the CC reports. Use `manual:` only to override a measured value.
@@ -24,6 +30,8 @@
 #   median over the run, outside adjustments (cc_reports.amc_unfocused_panels).
 #   An observation's own faulty_mirrors overrides the night value. LST-1's AMC
 #   is not in the MAGIC CC reports (null).
+# - channels: DAQ channels that recorded light (the others sit at the
+#   electronic pedestal); C = MAGIC-1, A = MAGIC-2, B = LST-1.
 # - null + "TODO(user)" marks information only you can supply (eLog, shift
 #   reports, ...).
 

@@ -15,7 +15,9 @@ dependencies = [
     "scipy",
     "astropy",
     "pandas",
-    "pyyaml"
+    "pyyaml",
+    "ruamel.yaml",   # comment-preserving edits of observation_log.yaml (kbo-night prepare)
+    "astroquery",    # SIMBAD lookups of star coordinates / magnitudes (kbo-night prepare)
 ]
 
 [project.optional-dependencies]
