@@ -21,12 +21,18 @@ dependencies = [
 [project.optional-dependencies]
 test = ["pytest"]
 
+[project.scripts]
+kbo-night = "kbo_occultation.cli:main"
+
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["kbo_occultation*"]
+
 [tool.setuptools.package-data]
-"kbo_occultation.data" = ["**/*.txt", "**/*.dat", "**/*.fits", "**/*.csv", "**/*.yaml"]
+"kbo_occultation.data" = ["**/*.txt", "**/*.dat", "**/*.fits", "**/*.csv", "**/*.yaml", "**/*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]

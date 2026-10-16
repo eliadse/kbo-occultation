@@ -3,7 +3,7 @@ import os
 PACKAGE_ROOT = os.path.abspath(os.path.dirname(__file__))
 PACKAGE_DATA = os.path.join(PACKAGE_ROOT, 'data')
 
-from .simulation import (
+from .simulation.engine import (
     compute_lightcurve,
     simulate_poly_point,
     OccultationEngine,
@@ -25,14 +25,14 @@ from .config import (
     ORM_ARRAY,
 )
 
-from .sweep import (
+from .simulation.sweep import (
     SweepPoint,
     run_parameter_sweep,
     to_records,
     to_dataframe,
 )
 
-from .detectability import (
+from .simulation.detectability import (
     spatial_to_time,
     spatial_power_spectrum,
     nyquist_frequency,
@@ -44,13 +44,13 @@ from .detectability import (
     is_detectable,
 )
 
-from .injection import (
+from .analysis.injection import (
     InjectionResult,
     inject_occultation,
     random_injection_time,
 )
 
-from .matched_filter import (
+from .analysis.matched_filter import (
     MatchedFilterResult,
     Candidate,
     robust_sigma,
@@ -60,7 +60,7 @@ from .matched_filter import (
     find_candidates,
 )
 
-from .injection_batch import (
+from .analysis.injection_batch import (
     TrialResult,
     MethodNoiseProfile,
     ArrayTrialResult,
@@ -72,13 +72,13 @@ from .injection_batch import (
     to_dataframe as batch_to_dataframe,
 )
 
-from .kinematics import (
+from .simulation.kinematics import (
     ShadowKinematics,
     shadow_velocity_opposition,
     shadow_velocity_from_target,
 )
 
-from .coincidence import (
+from .analysis.coincidence import (
     TelescopeSearchResult,
     CoincidenceEvent,
     AccidentalRateResult,
@@ -87,7 +87,7 @@ from .coincidence import (
     accidental_coincidence_rate,
 )
 
-from .upper_limits import (
+from .analysis.upper_limits import (
     EfficiencyCurve,
     SurveyExposure,
     UpperLimitResult,
@@ -98,7 +98,7 @@ from .upper_limits import (
     cumulative_density_upper_limit,
 )
 
-from .rates import (
+from .analysis.rates import (
     event_rate,
     kbo_velocity,
     surface_density,
@@ -108,12 +108,12 @@ from .rates import (
     Q_L,
 )
 
-from .search import (
+from .analysis.search import (
     ObservationSearchResult,
     search_observation,
 )
 
-from .dc_combine import (
+from .observations.dc_combine import (
     load_dc_series,
     interpolate_dc_to_fast,
     combine_fast_and_dc,
@@ -124,14 +124,25 @@ from .dc_combine import (
     despike_lightcurve_with_dc,
 )
 
-from .filtering import (
+from .observations.filtering import (
     highpass_fft,
     highpass_butterworth,
     highpass_lightcurve,
     remove_outliers_lightcurve,
 )
 
-from .photometry import (
+from .observations.photometry import (
     LightCurve,
     preprocess_observation,
+    good_time_lightcurve,
 )
+
+from .observations.log import (
+    Observation,
+    Night,
+    ObservationLog,
+    load_observation_log,
+    validate,
+)
+
+from .analysis.snr import snr_report
