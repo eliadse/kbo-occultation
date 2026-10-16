@@ -2,6 +2,7 @@
 ``kbo-night``: take an observation night from raw files to an SNR table.
 
     kbo-night list                       nights in the log and what is ready / missing
+    kbo-night missing 2026-10-20         what is still missing for the night (read-only)
     kbo-night prepare 2026-10-20         write/complete the night in the log (SIMBAD, CC, AMC,
                                          channels), build .npz caches + conditions, list what's missing
     kbo-night conditions 2026-10-20      observing conditions per observation
@@ -46,7 +47,18 @@ def cmd_list(args):
                        "conditions": "yes" if has_cond else ("no" if night.cc_reports else "n/a"),
                        "missing": len(validate(night))})
     _show(pd.DataFrame(status).set_index("night").join(table[["telescopes", "n_stars", "dark_run"]]))
-    print(f"\nlog: {log.path}\n`kbo-night prepare NIGHT` lists the missing items of a night.")
+    print(f"\nlog: {log.path}\n`kbo-night missing NIGHT` lists the missing items of a night (read-only);"
+          f"\n`kbo-night prepare NIGHT` fills in what it can and lists what's still missing.")
+
+
+def cmd_missing(args):
+    for night in _load(args).select(args.nights):
+        problems = validate(night)
+        print(f"── {night.name}: missing")
+        for p in problems:
+            print(f"  {p}")
+        if not problems:
+            print("  nothing")
 
 
 def cmd_prepare(args):
@@ -99,6 +111,10 @@ def build_parser():
 
     s = sub.add_parser("list", help="nights in the log and their status")
     s.set_defaults(func=cmd_list)
+
+    s = sub.add_parser("missing", help="what is still missing for nights in the log (read-only)")
+    s.add_argument("nights", nargs="*")
+    s.set_defaults(func=cmd_missing)
 
     s = sub.add_parser("prepare", help="create/complete nights in the log, build caches and conditions")
     s.add_argument("nights", nargs="*", help="night dates YYYY-MM-DD (new or already in the log); none = all")
