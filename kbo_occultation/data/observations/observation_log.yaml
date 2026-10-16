@@ -76,6 +76,7 @@ nights:
         spectral_type: B9.5IIIp(HgMn)
         good_time: [230, 260]
         notes: null
+        simbad_id: HD 4335 # SIMBAD
       HD-8837:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-8837_10002_20002_20251216T220814.npz
         type: star
@@ -86,6 +87,7 @@ nights:
         spectral_type: B9IV
         good_time: [18, 48]
         notes: null
+        simbad_id: HD 8837 # SIMBAD
       HD-22353:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-22353_10002_20002_20251216T222322.npz
         type: star
@@ -96,6 +98,7 @@ nights:
         spectral_type: B9
         good_time: [200, 230]
         notes: null
+        simbad_id: HD 22353 # SIMBAD
       HD-17316:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz
         type: star
@@ -106,6 +109,7 @@ nights:
         spectral_type: B9
         good_time: [340, 370]
         notes: null
+        simbad_id: HD 17316 # SIMBAD
       HD-20920:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-20920_10002_20002_20251216T230517.npz
         type: star
@@ -116,6 +120,7 @@ nights:
         spectral_type: B8
         good_time: [100, 130]
         notes: null
+        simbad_id: HD 20920 # SIMBAD
       dark:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_dark_10002_20002_20251216T231513.npz
         type: dark
@@ -160,6 +165,7 @@ nights:
         good_time: [120, 165]
         faulty_mirrors: {m2: 12}
         notes: null
+        simbad_id: HD 40626 # SIMBAD
       HD-45563:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-45563_10002_20002_20260308T222546.npz
         type: star
@@ -171,6 +177,7 @@ nights:
         good_time: [153, 207]
         faulty_mirrors: {m1: 36, m2: 19}
         notes: null
+        simbad_id: HD 45563 # SIMBAD
       HD-46016:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-46016_10002_20002_20260308T223407.npz
         type: star
@@ -182,6 +189,7 @@ nights:
         good_time: [103, 166]
         faulty_mirrors: {m2: 23}
         notes: null
+        simbad_id: HD 46016 # SIMBAD
 
   "2026-08-19":
     date: "2026-08-19"
@@ -223,6 +231,7 @@ nights:
         spectral_type: B8
         good_time: null  # TODO(user)
         notes: null
+        simbad_id: HD 170263 # SIMBAD
       HD176914:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD176914_10002_20002_20260820T011103.npz
         type: star
@@ -233,6 +242,7 @@ nights:
         spectral_type: B5
         good_time: null  # TODO(user)
         notes: null
+        simbad_id: HD 176914 # SIMBAD
       DarkPatch53:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_DarkPatch53_10002_20002_20260820T011757.npz
         type: dark
@@ -254,6 +264,7 @@ nights:
         spectral_type: B5
         good_time: null  # TODO(user)
         notes: null
+        simbad_id: HD 196243 # SIMBAD
       HD199102:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD199102_10002_20002_20260820T013504.npz
         type: star
@@ -264,3 +275,4 @@ nights:
         spectral_type: B9V
         good_time: null  # TODO(user)
         notes: null
+        simbad_id: HD 199102 # SIMBAD

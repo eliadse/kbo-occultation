@@ -16,7 +16,9 @@ dependencies = [
     "astropy",
     "pandas",
     "pyyaml",
-    "ruamel.yaml",   # comment-preserving edits of observation_log.yaml (kbo-night prepare)
+    # Comment-preserving edits of observation_log.yaml (kbo-night prepare). Pinned:
+    # observations.log.set_value/append_key use ruamel's comment internals.
+    "ruamel.yaml==0.19.1",
     "astroquery",    # SIMBAD lookups of star coordinates / magnitudes (kbo-night prepare)
 ]
 
