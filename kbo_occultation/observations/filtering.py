@@ -99,28 +99,16 @@ def highpass_lightcurve(lc, cutoff_hz: float, method: str = "butterworth", **kwa
 def remove_outliers_lightcurve(lc, threshold_sigma: float = 9.0, window_samples: int = 21,
                                polarity: str = "positive"):
     """
-    Remove isolated single-sample spikes from a LightCurve's signal.
+    Remove isolated single-sample spikes from a LightCurve's signal. It targets 
+    the narrow upward spikes (typically one sample) seen in the fast curves. 
 
-    Self-contained (no DC report needed, unlike dc_combine.despike_lightcurve_with_dc).
-    Targets the narrow upward spikes (typically one sample) seen in the fast
-    curves -- cosmic hits and readout glitches -- *without* touching real
-    structure: the broad wind/tracking dips or the ms-scale occultation dips the
-    search pipeline is meant to find.
-
-    Two choices make it specific to those spikes rather than a general sigma clip:
-
-    - The baseline is a *short* rolling median (``window_samples``, a handful of
-      samples), so it hugs the real signal and only a point that sticks out from
-      its immediate neighbours has a large residual. A wide window would instead
-      straddle broad features and flag their extrema.
-    - Only ``polarity="positive"`` residuals are flagged by default, so downward
-      dips (real occultations, wind valleys) are left completely alone.
+    The short rolling median of just 21 samples makes it so that no real signal
+    structure is removed, only points that have a large residual. Setting polarity 
+    to positive by default means that downward dips are left alone.
 
     Flagged samples are *replaced by the local baseline value* (the neighbours'
-    median), which keeps the array length and uniform time grid intact -- so the
-    output stays valid input to highpass_lightcurve, PSD estimation and the
-    matched filter, unlike dropping samples.
-
+    median), which keeps the array length and uniform time grid intact.
+    
     Parameters
     ----------
     lc : LightCurve
