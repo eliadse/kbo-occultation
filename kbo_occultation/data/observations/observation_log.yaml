@@ -1,0 +1,278 @@
+# Observation log for the fast-photometry test-star campaign.
+#
+# Single source of truth for everything the stat-binary files do NOT contain:
+# star identity, magnitudes, coordinates, good-time windows, faulty mirrors,
+# eLog notes and where the auxiliary (DC / CC) reports live. Loaded by
+# kbo_occultation.observations.log; rendered as tables in
+# notebooks/snr_study.ipynb and by `kbo-night`.
+#
+# Nights are written and completed by `kbo-night prepare <YYYY-MM-DD>`: it
+# fills every field it can derive (filenames, data, SIMBAD, CC/AMC reports),
+# marking each with a comment naming the source, and never overwrites a value
+# that is already set (unless --refresh). Edit freely: your values are kept.
+# Only good_time, elog_notes, notes, optical_filter and manual* are yours to add.
+#
+# Conventions
+# - file / dc_report / conditions_dir are relative to this file's directory
+#   (or to $KBO_OBSERVATIONS_DIR if set) unless absolute.
+# - cc_reports point to the raw MAGIC CC .rep files (outside the repo, ~300 MB),
+#   relative to paths.cc_reports_root (or $KBO_CC_REPORTS_ROOT if set);
+#   `kbo-night prepare <night>` condenses them into conditions/<night>/*.csv.
+# - good_time: [start, stop] in seconds relative to the first sample of the
+#   run; null = use the whole run.
+# - Coordinates (ICRS, deg), B/V magnitudes and spectral types: SIMBAD (stars),
+#   CC-REPORT target RA/Dec (dark runs).
+# - Zd/airmass/moon are NOT typed here: they are computed from the coordinates
+#   and the run's time span (cc_reports.pointing_conditions) and cross-checked
+#   against the CC reports. Use `manual:` only to override a measured value.
+# - faulty_mirrors: {telescope: number of mirror panels not correctly focused}
+#   = undefined + error panels of the CC AMC-REPORT (PANELS fields 2 and 4),
+#   median over the run, outside adjustments (cc_reports.amc_unfocused_panels).
+#   An observation's own faulty_mirrors overrides the night value. LST-1's AMC
+#   is not in the MAGIC CC reports (null).
+# - channels: DAQ channels that recorded light (the others sit at the
+#   electronic pedestal); C = MAGIC-1, A = MAGIC-2, B = LST-1.
+# - null + "TODO(user)" marks information only you can supply (eLog, shift
+#   reports, ...).
+
+paths:
+  # Root of the raw MAGIC CC .rep files; override with $KBO_CC_REPORTS_ROOT.
+  cc_reports_root: ~/Projects/Fast_photometry/DCs
+
+site:
+  # Geodetic site coordinates come from config.ORM_ARRAY (not repeated here).
+  name: ORM La Palma
+  # Atmospheric extinction coefficients (mag / airmass) used by
+  # snr_measurement.extinction_factor. k_B = 0.23 is the value used in the old
+  # check_fast_photometry_data notebook; k_V = 0.13 is a typical ORM value.
+  extinction_k:
+    B: 0.23
+    V: 0.13
+
+nights:
+
+  "2025-12-16":
+    date: "2025-12-16"
+    dc_report: DCs/2025_12_16/dc_report.pkl
+    cc_reports:
+      m2: 2025/CC_M2_2025_12_16_17_23_27.rep
+    conditions_dir: conditions/2025-12-16
+    # Only MAGIC-II (channel A) was connected that night; B/C carry no star light.
+    channels: [A]
+    optical_filter: null
+    daq: {sampling: 262144, sample_duration_ns: 2, range_mV: 200, impedance_ohm: 50}
+    dark_run: dark
+    faulty_mirrors:
+      m2: 1  # 0 undefined + 1 error
+    elog_notes: null  # TODO(user): weather/eLog remarks for the night
+    observations:
+      HD-4335:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-4335_10002_20002_20251216T212254.npz
+        type: star
+        ra_deg: 11.54505
+        dec_deg: 44.86150
+        mag_B: 5.954
+        mag_V: 6.024
+        spectral_type: B9.5IIIp(HgMn)
+        good_time: [230, 260]
+        notes: null
+        simbad_id: HD 4335 # SIMBAD
+      HD-8837:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-8837_10002_20002_20251216T220814.npz
+        type: star
+        ra_deg: 21.94537
+        dec_deg: 40.33580
+        mag_B: 6.553
+        mag_V: 6.587
+        spectral_type: B9IV
+        good_time: [18, 48]
+        notes: null
+        simbad_id: HD 8837 # SIMBAD
+      HD-22353:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-22353_10002_20002_20251216T222322.npz
+        type: star
+        ra_deg: 54.34701
+        dec_deg: 40.08975
+        mag_B: 7.038
+        mag_V: 7.008
+        spectral_type: B9
+        good_time: [200, 230]
+        notes: null
+        simbad_id: HD 22353 # SIMBAD
+      HD-17316:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-17316_10002_20002_20251216T223319.npz
+        type: star
+        ra_deg: 42.05864
+        dec_deg: 43.62254
+        mag_B: 7.53
+        mag_V: 7.42
+        spectral_type: B9
+        good_time: [340, 370]
+        notes: null
+        simbad_id: HD 17316 # SIMBAD
+      HD-20920:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-20920_10002_20002_20251216T230517.npz
+        type: star
+        ra_deg: 50.98147
+        dec_deg: 41.33704
+        mag_B: 7.96
+        mag_V: 8.03
+        spectral_type: B8
+        good_time: [100, 130]
+        notes: null
+        simbad_id: HD 20920 # SIMBAD
+      dark:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_dark_10002_20002_20251216T231513.npz
+        type: dark
+        ra_deg: null  # TODO(user): where was the telescope pointing (closed lids? dark patch?)
+        dec_deg: null
+        mag_B: null
+        mag_V: null
+        spectral_type: null
+        good_time: null
+        notes: Dark run used as the NSB reference for the night.
+
+  "2026-03-08":
+    date: "2026-03-08"
+    dc_report: DCs/2026_03_08/dc_report.pkl
+    cc_reports:
+      m1: 2026/CC_M1_2026_03_08_20_14_52.rep
+      m2: 2026/CC_M2_2026_03_08_20_14_52.rep
+    conditions_dir: conditions/2026-03-08
+    channels: [A, B, C]
+    optical_filter: null
+    daq: {sampling: 262144, sample_duration_ns: 2, range_mV: 200, impedance_ohm: 50}
+    dark_run: null  # no dark run: NSB from the DC background pixels / DC histogram
+    faulty_mirrors:
+      # AMC-REPORT: m1 9-10 undefined + 26 error; m2 7-18 undefined + 5 error,
+      # changing between runs (per-run m2 values below). The previous night's
+      # shift notes listed only 11+1 (m1) and 0+2 (m2) panels.
+      m1: 35
+      m2: 19
+      lst1: null  # not in the MAGIC CC reports
+    elog_notes: >-
+      Many AMC panels in error/undefined state (see faulty_mirrors). LIDAR not
+      operating (ERROR_CODE 4 all night). TODO(user): any other eLog remarks.
+    observations:
+      HD-40626:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-40626_10002_20002_20260308T221010.npz
+        type: star
+        ra_deg: 90.70251
+        dec_deg: 49.90568
+        mag_B: 5.998
+        mag_V: 6.04
+        spectral_type: B9.5IV
+        good_time: [120, 165]
+        faulty_mirrors: {m2: 12}
+        notes: null
+        simbad_id: HD 40626 # SIMBAD
+      HD-45563:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-45563_10002_20002_20260308T222546.npz
+        type: star
+        ra_deg: 97.06986
+        dec_deg: 1.91268
+        mag_B: 6.403
+        mag_V: 6.45
+        spectral_type: B9IV
+        good_time: [153, 207]
+        faulty_mirrors: {m1: 36, m2: 19}
+        notes: null
+        simbad_id: HD 45563 # SIMBAD
+      HD-46016:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-46016_10002_20002_20260308T223407.npz
+        type: star
+        ra_deg: 98.29033
+        dec_deg: 46.47624
+        mag_B: 6.97
+        mag_V: 7.0
+        spectral_type: B8
+        good_time: [103, 166]
+        faulty_mirrors: {m2: 23}
+        notes: null
+        simbad_id: HD 46016 # SIMBAD
+
+  "2026-08-19":
+    date: "2026-08-19"
+    dc_report: DCs/2026_08_19/dc_report.pkl
+    cc_reports:
+      m1: 2026/2026_08_19/CC_M1_2026_08_19_18_55_05.rep
+      m2: 2026/2026_08_19/CC_M2_2026_08_19_18_55_05.rep
+    conditions_dir: conditions/2026-08-19
+    channels: [A, B, C]
+    optical_filter: null
+    daq: {sampling: 262144, sample_duration_ns: 2, range_mV: 200, impedance_ohm: 50}
+    dark_run: DarkPatch54
+    faulty_mirrors:
+      m1: 11  # 10 undefined + 1 error
+      m2: 2   # 0 undefined + 2 error
+      lst1: null  # not in the MAGIC CC reports
+    elog_notes: >-
+      LIDAR not operating (LIDAR-COM-ERROR in the CC reports). TODO(user): any
+      other eLog remarks.
+    observations:
+      DarkPatch54:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_DarkPatch54_10002_20002_20260820T005147.npz
+        type: dark
+        # Coordinates from the CC-REPORT target RA/Dec (~0.15 deg from HD170263).
+        ra_deg: 276.98
+        dec_deg: 28.88
+        mag_B: null
+        mag_V: null
+        spectral_type: null
+        good_time: null
+        notes: Dark patch taken just before HD170263.
+      HD170263:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD170263_10002_20002_20260820T005901.npz
+        type: star
+        ra_deg: 276.82301
+        dec_deg: 28.92889
+        mag_B: 8.62
+        mag_V: 8.62
+        spectral_type: B8
+        good_time: null  # TODO(user)
+        notes: null
+        simbad_id: HD 170263 # SIMBAD
+      HD176914:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD176914_10002_20002_20260820T011103.npz
+        type: star
+        ra_deg: 285.32493
+        dec_deg: 28.41201
+        mag_B: 6.927
+        mag_V: 7.034
+        spectral_type: B5
+        good_time: null  # TODO(user)
+        notes: null
+        simbad_id: HD 176914 # SIMBAD
+      DarkPatch53:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_DarkPatch53_10002_20002_20260820T011757.npz
+        type: dark
+        # Coordinates from the CC-REPORT target RA/Dec (~0.2 deg from HD176914).
+        ra_deg: 285.15
+        dec_deg: 28.27
+        mag_B: null
+        mag_V: null
+        spectral_type: null
+        good_time: null
+        notes: null
+      HD196243:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD196243_10002_20002_20260820T012707.npz
+        type: star
+        ra_deg: 308.78102
+        dec_deg: 30.25286
+        mag_B: 7.48
+        mag_V: 7.59
+        spectral_type: B5
+        good_time: null  # TODO(user)
+        notes: null
+        simbad_id: HD 196243 # SIMBAD
+      HD199102:
+        file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD199102_10002_20002_20260820T013504.npz
+        type: star
+        ra_deg: 313.48634
+        dec_deg: 29.49967
+        mag_B: 8.0
+        mag_V: 8.02
+        spectral_type: B9V
+        good_time: null  # TODO(user)
+        notes: null
+        simbad_id: HD 199102 # SIMBAD

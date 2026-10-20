@@ -31,15 +31,18 @@ Thumbs.db
 *.png
 *.pdf
 
-# Actual observation data
-data/observations
+# Actual observation data: everything except the observation log
+kbo_occultation/data/observations/*
+!kbo_occultation/data/observations/observation_log.yaml
 *.bin
 *.pkl
 *.npz
 *.csv
-*.yaml
 
+# Generated plots / tables (examples, kbo-night, notebooks)
 outputs/
-tests/
-.gitignore
+
+# Only the unit tests are versioned; the other scripts in tests/ are local studies
+tests/*
+!tests/unit/
 TODO.txt
