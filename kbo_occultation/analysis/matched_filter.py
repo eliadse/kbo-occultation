@@ -54,8 +54,7 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
     per-sample robust noise level of the resulting residual, factored
     out of sliding_matched_filter_snr so it can be computed once and reused
     (e.g. injection_batch.py caches this per noise-reduction method
-    instead of recomputing it -- by far the most expensive step here --
-    for every trial).
+    instead of recomputing it for every trial).
 
     Parameters
     ----------
