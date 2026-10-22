@@ -64,7 +64,7 @@ nights:
     dark_run: dark
     faulty_mirrors:
       m2: 1  # 0 undefined + 1 error
-    elog_notes: null  # TODO(user): weather/eLog remarks for the night
+    elog_notes: {M2: 10.07}
     observations:
       HD-4335:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-4335_10002_20002_20251216T212254.npz
@@ -74,7 +74,7 @@ nights:
         mag_B: 5.954
         mag_V: 6.024
         spectral_type: B9.5IIIp(HgMn)
-        good_time: [230, 260]
+        good_time: [230, 280]
         notes: null
         simbad_id: HD 4335 # SIMBAD
       HD-8837:
@@ -107,7 +107,7 @@ nights:
         mag_B: 7.53
         mag_V: 7.42
         spectral_type: B9
-        good_time: [340, 370]
+        good_time: [300, 380]
         notes: null
         simbad_id: HD 17316 # SIMBAD
       HD-20920:
@@ -118,7 +118,7 @@ nights:
         mag_B: 7.96
         mag_V: 8.03
         spectral_type: B8
-        good_time: [100, 130]
+        good_time: [100, 250]
         notes: null
         simbad_id: HD 20920 # SIMBAD
       dark:
@@ -150,9 +150,7 @@ nights:
       m1: 35
       m2: 19
       lst1: null  # not in the MAGIC CC reports
-    elog_notes: >-
-      Many AMC panels in error/undefined state (see faulty_mirrors). LIDAR not
-      operating (ERROR_CODE 4 all night). TODO(user): any other eLog remarks.
+    elog_notes: {M1: 11.15, M2: 9.71}
     observations:
       HD-40626:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-40626_10002_20002_20260308T221010.npz
@@ -162,7 +160,7 @@ nights:
         mag_B: 5.998
         mag_V: 6.04
         spectral_type: B9.5IV
-        good_time: [120, 165]
+        good_time: [120, 163]
         faulty_mirrors: {m2: 12}
         notes: null
         simbad_id: HD 40626 # SIMBAD
@@ -174,7 +172,7 @@ nights:
         mag_B: 6.403
         mag_V: 6.45
         spectral_type: B9IV
-        good_time: [153, 207]
+        good_time: [153, 205]
         faulty_mirrors: {m1: 36, m2: 19}
         notes: null
         simbad_id: HD 45563 # SIMBAD
@@ -186,7 +184,7 @@ nights:
         mag_B: 6.97
         mag_V: 7.0
         spectral_type: B8
-        good_time: [103, 166]
+        good_time: [101, 166]
         faulty_mirrors: {m2: 23}
         notes: null
         simbad_id: HD 46016 # SIMBAD
@@ -206,9 +204,7 @@ nights:
       m1: 11  # 10 undefined + 1 error
       m2: 2   # 0 undefined + 2 error
       lst1: null  # not in the MAGIC CC reports
-    elog_notes: >-
-      LIDAR not operating (LIDAR-COM-ERROR in the CC reports). TODO(user): any
-      other eLog remarks.
+    elog_notes: {M1: 9.45, M2: 9.02}
     observations:
       DarkPatch54:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_DarkPatch54_10002_20002_20260820T005147.npz
@@ -229,7 +225,7 @@ nights:
         mag_B: 8.62
         mag_V: 8.62
         spectral_type: B8
-        good_time: null  # TODO(user)
+        good_time: [3, 345]
         notes: null
         simbad_id: HD 170263 # SIMBAD
       HD176914:
@@ -240,7 +236,7 @@ nights:
         mag_B: 6.927
         mag_V: 7.034
         spectral_type: B5
-        good_time: null  # TODO(user)
+        good_time: [65, 110]
         notes: null
         simbad_id: HD 176914 # SIMBAD
       DarkPatch53:
@@ -262,7 +258,7 @@ nights:
         mag_B: 7.48
         mag_V: 7.59
         spectral_type: B5
-        good_time: null  # TODO(user)
+        good_time: [220, 295]
         notes: null
         simbad_id: HD 196243 # SIMBAD
       HD199102:
@@ -273,6 +269,6 @@ nights:
         mag_B: 8.0
         mag_V: 8.02
         spectral_type: B9V
-        good_time: null  # TODO(user)
+        good_time: [52, 180]
         notes: null
         simbad_id: HD 199102 # SIMBAD
