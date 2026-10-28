@@ -84,101 +84,102 @@ def interpolate_dc_to_fast(fast_time_s: np.ndarray, dc_time_s: np.ndarray, dc_va
     return np.interp(fast_time_s, dc_time_s, dc_value)
 
 
-def combine_fast_and_dc(time_s: np.ndarray, fast_signal: np.ndarray, dc_on_fast: np.ndarray,
-                         frequency_cut_hz: float, return_spectra: bool = False):
+def raised_cosine_lowpass(freq_hz: np.ndarray, cut_hz: float, transition_frac: float = 0.5) -> np.ndarray:
     """
-    Function modified from magic_spysii combine_dc
-    Frequency-domain hybrid of a fast signal and a slow DC series already
-    resampled onto the same uniform time grid: below frequency_cut_hz, use
-    the DC report's own spectral content; at and above it, use the fast
-    signal's. Both are mean-normalised before combining, and the result is
-    re-scaled back to the DC's absolute level.
+    Smooth low-pass weight: 1 below cut*(1-frac), 0 above cut*(1+frac),
+    raised-cosine in between (so the weight is 1/2 at the crossover `cut_hz`).
+    """
+    lo, hi = cut_hz * (1.0 - transition_frac), cut_hz * (1.0 + transition_frac)
+    if hi <= lo:
+        return (freq_hz < cut_hz).astype(float)
+    x = np.clip((freq_hz - lo) / (hi - lo), 0.0, 1.0)
+    return 0.5 * (1.0 + np.cos(np.pi * x))
 
-    Caution -- this is a hard, bin-wise spectral swap (equivalent to
-    filtering.highpass_fft's brick-wall cutoff applied to the fast signal,
-    summed with an equally brick-wall low-pass of the DC series), not a
-    smooth rolloff like filtering.highpass_butterworth. As that module's
-    own docstring notes, a brick-wall cutoff can ring in the time domain
-    around sharp features -- and an injection-recovery test
-    (kbo_occultation.injection_batch.run_injection_monte_carlo, see
-    examples/injection_montecarlo_2025_12_16.py) confirmed this matters in
-    practice: for a real KBO occultation template whose own timescale
-    (~0.3s here) is only ~3x this function's default cutoff period (1s),
-    the combined signal's fine structure can diverge enough from the raw
-    template's that a shape-consistency check
-    (matched_filter.shape_veto_chi2) rejects a genuine, high-SNR event
-    (measured directly: SNR~165 but chi2/dof~18 for one R=300m trial).
-    Rebuilding the comparison template by running this same function on a
-    flat reference (matched_filter/injection_batch's approach for a true
-    LTI filter like highpass) only partly compensates (chi2/dof dropped to
-    ~5, still short of passing) with a few seconds of context on each side
-    -- consistent with the ringing extending further than that, unlike the
-    fast-decaying, near-local response of a Butterworth filter. Net effect:
-    this correction can distort real event shape for occultations whose
-    duration approaches 1/frequency_cut_hz, in a way that's harder to
-    correct for in a matched-filter search than highpass's cleaner,
-    faster-decaying distortion is.
+
+def check_dc_crossover(frequency_cut_hz: float, dc_nyquist_hz: float, transition_frac: float = 0.5) -> None:
+    """Raise if the swap would import DC content near/above its Nyquist frequency."""
+    if frequency_cut_hz > 0.8 * dc_nyquist_hz:
+        raise ValueError(
+            f"frequency_cut_hz={frequency_cut_hz} Hz exceeds 0.8 x the DC Nyquist "
+            f"({0.8 * dc_nyquist_hz:.3g} Hz): the DC series has no (unaliased) content there.")
+    if frequency_cut_hz * (1.0 + transition_frac) > dc_nyquist_hz:
+        raise ValueError("the raised-cosine transition extends above the DC Nyquist frequency")
+
+
+def combine_fast_and_dc(time_s: np.ndarray, fast_signal: np.ndarray, dc_on_fast: np.ndarray,
+                         frequency_cut_hz: float, return_spectra: bool = False,
+                         transition_frac: float = 0.5, taper_s: float = 5.0,
+                         dc_nyquist_hz: Optional[float] = None):
+    """
+    Frequency-domain hybrid of a fast signal and a slow DC series already
+    resampled onto the same uniform time grid: below the crossover use the
+    DC report's spectral content, above it the fast signal's. Both are
+    mean-normalised first and the result is re-scaled to the DC's level.
+
+    Differences from the earlier brick-wall swap (which rang in the time
+    domain and, at a 1 Hz crossover, sat above the 0.5 Hz DC Nyquist):
+
+    - the crossover is a raised-cosine transition of half-width
+      ``transition_frac * frequency_cut_hz`` (weight 1/2 at the crossover);
+    - the crossover is validated against ``dc_nyquist_hz`` (centre <= 0.8 x
+      Nyquist, transition below Nyquist) when that is given;
+    - the record ends are tapered: the DC-minus-fast difference that gets
+      imported is multiplied by a Tukey window with ``taper_s`` seconds at
+      each end, so the periodic-FFT wrap-around discontinuity never reaches
+      the data and the first/last seconds fall back to the fast signal.
+
+    combined = fast + lowpass( taper * (dc - fast) ), in mean-normalised units.
 
     Parameters
     ----------
-    time_s : array_like
-        Uniform time grid shared by `fast_signal` and `dc_on_fast`.
-    fast_signal : array_like
-        High-cadence signal (e.g. LightCurve.signal, std_dev^2).
-    dc_on_fast : array_like
-        Slow DC series already interpolated onto `time_s` (see
-        interpolate_dc_to_fast).
-    frequency_cut_hz : float
-        Crossover frequency: rfft bins with frequency < frequency_cut_hz
-        come from `dc_on_fast`; bins at or above it come from `fast_signal`.
-        The PSD/coherence checks in inspect_real_noise_2025_12_16.py put the
-        correlated noise excess below ~1-2 Hz, so that's a reasonable
-        starting point -- but it should stay well below the frequency of
-        the occultation signal you're trying to preserve.
-    return_spectra : bool
-        If True, also return the individual and combined rfft spectra
-        (mean-normalised), for diagnosing the choice of frequency_cut_hz.
-
-    Returns
-    -------
-    combined : ndarray
-        Same length as the inputs, in the DC's absolute units.
-    spectra : dict, optional
-        {'freq_hz', 'fft_dc', 'fft_fast', 'fft_combined'} -- only if
-        return_spectra.
+    time_s, fast_signal, dc_on_fast : uniform grid, fast signal, DC on that grid.
+    frequency_cut_hz : crossover centre.
+    return_spectra : also return the spectra, for diagnostics.
+    transition_frac, taper_s, dc_nyquist_hz : see above (taper_s=0 disables
+        the taper).
     """
-    time_s = np.asarray(time_s)
-    fast_signal = np.asarray(fast_signal)
-    dc_on_fast = np.asarray(dc_on_fast)
+    from scipy.signal.windows import tukey
 
+    time_s = np.asarray(time_s)
+    fast_signal = np.asarray(fast_signal, dtype=float)
+    dc_on_fast = np.asarray(dc_on_fast, dtype=float)
+    if dc_nyquist_hz is not None:
+        check_dc_crossover(frequency_cut_hz, dc_nyquist_hz, transition_frac)
+
+    n = len(time_s)
     dt_s = float(np.median(np.diff(time_s)))
-    freq_hz = np.fft.rfftfreq(len(time_s), d=dt_s)
+    freq_hz = np.fft.rfftfreq(n, d=dt_s)
 
     mean_dc = np.mean(dc_on_fast)
     mean_fast = np.mean(fast_signal)
+    dc_n = dc_on_fast / mean_dc
+    fast_n = fast_signal / mean_fast
 
-    fft_dc = np.fft.rfft(dc_on_fast / mean_dc)
-    fft_fast = np.fft.rfft(fast_signal / mean_fast)
+    window = np.ones(n)
+    if taper_s and taper_s > 0:
+        window = tukey(n, alpha=min(1.0, 2.0 * taper_s / (n * dt_s)))
 
-    fft_combined = fft_dc.copy()
-    above_cut = freq_hz >= frequency_cut_hz
-    fft_combined[above_cut] = fft_fast[above_cut]
+    weight = raised_cosine_lowpass(freq_hz, frequency_cut_hz, transition_frac)
+    fft_fast = np.fft.rfft(fast_n)
+    fft_diff = np.fft.rfft(window * (dc_n - fast_n))
+    fft_combined = fft_fast + weight * fft_diff
 
-    combined = np.fft.irfft(fft_combined, n=len(time_s)) * mean_dc
+    combined = np.fft.irfft(fft_combined, n=n) * mean_dc
 
     if return_spectra:
         return combined, {
             "freq_hz": freq_hz,
-            "fft_dc": fft_dc,
+            "fft_dc": np.fft.rfft(dc_n),
             "fft_fast": fft_fast,
             "fft_combined": fft_combined,
+            "weight": weight,
         }
     return combined
 
 
 def combine_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, frequency_cut_hz: float,
                                 telescope: str = "m2", pixel: int = 0,
-                                return_spectra: bool = False) -> LightCurve:
+                                return_spectra: bool = False, **kwargs) -> LightCurve:
     """
     End-to-end convenience: load a DC report, interpolate it onto `lc`'s
     time grid, and return a new LightCurve whose signal is the frequency-
@@ -191,12 +192,15 @@ def combine_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, frequency_cu
     lc : LightCurve
         Fast light curve, e.g. from LightCurve.from_stat_binary_all(...)[channel].
     dc_report_path, telescope, pixel : see load_dc_series.
-    frequency_cut_hz, return_spectra : see combine_fast_and_dc.
+    frequency_cut_hz, return_spectra, **kwargs : see combine_fast_and_dc (kwargs: transition_frac, taper_s).
+    The crossover is checked against the DC Nyquist frequency.
     """
     dc_time_s, dc_value = load_dc_series(dc_report_path, telescope=telescope, pixel=pixel)
     dc_on_fast = interpolate_dc_to_fast(lc.time, dc_time_s, dc_value)
 
-    result = combine_fast_and_dc(lc.time, lc.signal, dc_on_fast, frequency_cut_hz, return_spectra=return_spectra)
+    dc_nyquist_hz = 0.5 / float(np.median(np.diff(dc_time_s)))
+    result = combine_fast_and_dc(lc.time, lc.signal, dc_on_fast, frequency_cut_hz,
+                                 return_spectra=return_spectra, dc_nyquist_hz=dc_nyquist_hz, **kwargs)
     combined, spectra = result if return_spectra else (result, None)
 
     meta = dict(lc.meta)
@@ -240,7 +244,7 @@ def smooth_dc_series(dc_time_s: np.ndarray, dc_value: np.ndarray, window_s: floa
 
 
 def detrend_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, telescope: str = "m2", pixel: int = 0,
-                                smooth_window_s: float = 10.0) -> LightCurve:
+                                smooth_window_s: float = 5.0) -> LightCurve:
     """
     Divide the fast light curve by a smoothed, mean-normalised DC trend
     (smooth_dc_series), removing the shared slow systematic without
@@ -256,7 +260,7 @@ def detrend_lightcurve_with_dc(lc: LightCurve, dc_report_path: str, telescope: s
         Median-filter window (seconds) applied to the DC series before
         it's used as a trend. Should be long enough to average out the
         DC's own per-sample scatter but short enough to still track real
-        transparency/tracking drift -- 10s is a starting point, well above
+        transparency/tracking drift -- 5s is a starting point, well above
         the DC's own ~1s cadence and well below a 15-minute run.
     """
     dc_time_s, dc_value = load_dc_series(dc_report_path, telescope=telescope, pixel=pixel)

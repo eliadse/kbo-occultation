@@ -27,6 +27,7 @@ test = ["pytest"]
 
 [project.scripts]
 kbo-night = "kbo_occultation.cli:main"
+kbo = "kbo_occultation.cli:main"
 
 [build-system]
 requires = ["setuptools"]

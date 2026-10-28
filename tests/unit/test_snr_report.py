@@ -63,3 +63,14 @@ def test_snr_report_on_white_noise(white_noise_log):
     assert "mean_comb" not in res or np.isnan(row["mean_comb"])
     assert row["airmass"] >= 1.0 and row["mirror_throughput"] == 1.0
     assert row["theo_obs_B"] > 0 and row["ratio_detr_B"] == pytest.approx(row["detr"] / row["theo_obs_B"])
+
+
+def test_snr_report_has_inband_noise_columns(white_noise_log):
+    res = snr_report(white_noise_log, n_bins=(10,), detrend_window_s=2.0)
+    row = res.iloc[0]
+    for col in ("inband_rms", "mf_sigma", "welch_short"):
+        assert col in res.columns
+    # white noise of per-sample rel. sigma REL_SIGMA: a filter sees the full sigma
+    # at the variance-flux level, the band holds only a fraction of it
+    assert row["mf_sigma"] == pytest.approx(REL_SIGMA, rel=0.3)
+    assert 0 < row["inband_rms"] < REL_SIGMA

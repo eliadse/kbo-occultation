@@ -10,7 +10,7 @@
 # fills every field it can derive (filenames, data, SIMBAD, CC/AMC reports),
 # marking each with a comment naming the source, and never overwrites a value
 # that is already set (unless --refresh). Edit freely: your values are kept.
-# Only good_time, elog_notes, notes, optical_filter and manual* are yours to add.
+# Only good_time, elog_notes, notes, optical_filter, exclude and manual* are yours to add.
 #
 # Conventions
 # - file / dc_report / conditions_dir are relative to this file's directory
@@ -32,6 +32,10 @@
 #   is not in the MAGIC CC reports (null).
 # - channels: DAQ channels that recorded light (the others sit at the
 #   electronic pedestal); C = MAGIC-1, A = MAGIC-2, B = LST-1.
+# - exclude: "<reason>" on a night or an observation leaves it out of default
+#   runs (kbo-night snr / conditions, the notebooks). A night named explicitly
+#   (`kbo-night snr 2026-03-08`) is still used; --include-excluded (CLI) or
+#   include_excluded=True (Python) brings back everything.
 # - null + "TODO(user)" marks information only you can supply (eLog, shift
 #   reports, ...).
 
@@ -42,8 +46,9 @@ paths:
 site:
   # Geodetic site coordinates come from config.ORM_ARRAY (not repeated here).
   name: ORM La Palma
-  # Atmospheric extinction coefficients (mag / airmass) used by
-  # snr_measurement.extinction_factor. k_B = 0.23 is the value used in the old
+  # Atmospheric extinction coefficients (mag / airmass) for
+  # snr_measurement.extinction_factor (not used by kbo-night snr, whose theory
+  # takes extinction from the atmospheric transmission curve). k_B = 0.23 is the value used in the old
   # check_fast_photometry_data notebook; k_V = 0.13 is a typical ORM value.
   extinction_k:
     B: 0.23
@@ -64,7 +69,7 @@ nights:
     dark_run: dark
     faulty_mirrors:
       m2: 1  # 0 undefined + 1 error
-    elog_notes: {M2: 10.07}
+    elog_notes: {m2: 10.07}
     observations:
       HD-4335:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-4335_10002_20002_20251216T212254.npz
@@ -134,6 +139,7 @@ nights:
 
   "2026-03-08":
     date: "2026-03-08"
+    #exclude: "no dark run: NSB only from the DC background pixel / DC histogram; biases the SNR studies"
     dc_report: DCs/2026_03_08/dc_report.pkl
     cc_reports:
       m1: 2026/CC_M1_2026_03_08_20_14_52.rep
@@ -150,7 +156,7 @@ nights:
       m1: 35
       m2: 19
       lst1: null  # not in the MAGIC CC reports
-    elog_notes: {M1: 11.15, M2: 9.71}
+    elog_notes: {m1: 11.15, m2: 9.71, lst1: 46.69}
     observations:
       HD-40626:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-40626_10002_20002_20260308T221010.npz
@@ -204,7 +210,7 @@ nights:
       m1: 11  # 10 undefined + 1 error
       m2: 2   # 0 undefined + 2 error
       lst1: null  # not in the MAGIC CC reports
-    elog_notes: {M1: 9.45, M2: 9.02}
+    elog_notes: {m1: 9.45, m2: 9.02}
     observations:
       DarkPatch54:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_DarkPatch54_10002_20002_20260820T005147.npz
@@ -225,7 +231,7 @@ nights:
         mag_B: 8.62
         mag_V: 8.62
         spectral_type: B8
-        good_time: [3, 345]
+        good_time: [3, 350]
         notes: null
         simbad_id: HD 170263 # SIMBAD
       HD176914:
@@ -236,7 +242,7 @@ nights:
         mag_B: 6.927
         mag_V: 7.034
         spectral_type: B5
-        good_time: [65, 110]
+        good_time: [68, 115]
         notes: null
         simbad_id: HD 176914 # SIMBAD
       DarkPatch53:
@@ -258,7 +264,7 @@ nights:
         mag_B: 7.48
         mag_V: 7.59
         spectral_type: B5
-        good_time: [220, 295]
+        good_time: [215, 290]
         notes: null
         simbad_id: HD 196243 # SIMBAD
       HD199102:
@@ -269,6 +275,6 @@ nights:
         mag_B: 8.0
         mag_V: 8.02
         spectral_type: B9V
-        good_time: [52, 180]
+        good_time: [52, 185]
         notes: null
         simbad_id: HD 199102 # SIMBAD

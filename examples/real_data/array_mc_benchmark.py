@@ -57,7 +57,7 @@ RADII_M = [100, 200, 300, 500]
 N_TRIALS_PER_RADIUS = 20
 PAD_S = 20.0
 MIN_NTEL = 2
-HIGHPASS_CUTOFF_HZ = 3.0
+from kbo_occultation.config import HIGHPASS_CUTOFF_HZ
 SEED = 2026
 
 # Injection/exposure velocity: the opposition value the benchmark run

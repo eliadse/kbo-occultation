@@ -12,7 +12,7 @@ with no assumption about where (or whether) an event is.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import numpy as np
 from scipy.ndimage import median_filter
@@ -37,6 +37,15 @@ class MatchedFilterResult:
     data_time: np.ndarray
     residual_data: np.ndarray
     residual_template: np.ndarray
+    # Per-lag noise of the filter output in flux units, i.e. the white
+    # per-sample sigma that would give the same SNR (snr = corr /
+    # template_norm / amp_sigma), aligned with `time`. For
+    # normalization="empirical" this is measured on the output itself;
+    # otherwise it is the white-noise value sigma_center (see
+    # sliding_matched_filter_snr).
+    amp_sigma: Optional[np.ndarray] = None
+    template_norm: float = 1.0
+    normalization: str = "empirical"
 
 
 @dataclass
@@ -90,6 +99,15 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
         that tracks it per baseline block instead of one number for the
         whole series. Estimated per decimated block and interpolated
         back to full resolution, mirroring the baseline.
+
+    Caveat -- this sigma is a *white-noise* level. It is the MAD of the
+    scatter within blocks (centred on each block's own median), so it sees
+    only noise faster than ~1 / block duration. On red noise the decimated
+    path ("auto") reads ~30 % lower than the exact one (decimate=1), and
+    either one understates the noise in the template's band by a large
+    factor (SNR sigma 3.6-5.3 instead of 1 in the test surrogates). The
+    honest normalisation is sliding_matched_filter_snr(normalization=
+    "empirical"), which is insensitive to this choice.
     """
     time = np.asarray(time)
     signal = np.asarray(signal)
@@ -135,11 +153,53 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
     return baseline, sigma
 
 
+Normalization = Literal["local_block", "global", "empirical"]
+
+
+def empirical_filter_sigma(amplitude: np.ndarray, window_samples: int,
+                           block_samples: Optional[int] = None) -> np.ndarray:
+    """
+    Rolling robust (1.4826 * median|x|) scatter of the matched-filter output
+    itself, per lag.
+
+    The output is measured block by block (blocks of ``block_samples``,
+    default ``window_samples // 8``), and the per-block values are
+    median-smoothed over ``window_samples`` and interpolated back to
+    every lag. Because the output of a filter on red noise is strongly
+    correlated, this -- unlike sigma_data / sqrt(sum T^2) -- includes the
+    noise power inside the template's own band.
+
+    An event occupies about one template length, i.e. a small part of one
+    block, and the MAD (50 % breakdown) plus the median across blocks
+    reject it, which is the "exclude +-1 template around the peak" of the
+    plan done implicitly: no event can move the estimate unless it covers
+    half of a block.
+    """
+    n = len(amplitude)
+    block = max(int(block_samples or max(window_samples // 8, 8)), 8)
+    n_blocks = n // block
+    if n_blocks < 3:
+        return np.full(n, 1.4826 * np.median(np.abs(amplitude)))
+    chunks = amplitude[:n_blocks * block].reshape(n_blocks, block)
+    # Median of |amp| about zero, NOT about each block's own median: the
+    # output is already detrended, and re-centering per block would throw
+    # away the slow wander of correlated noise, which is exactly the
+    # excess this estimator exists to capture.
+    mad = np.median(np.abs(chunks), axis=1)
+    win_blocks = max(window_samples // block, 3) | 1
+    sigma_blocks = 1.4826 * median_filter(mad, size=win_blocks, mode="reflect")
+    centers = (np.arange(n_blocks) + 0.5) * block
+    return np.interp(np.arange(n), centers, sigma_blocks)
+
+
 def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
                                 template_time: np.ndarray, template_intensity: np.ndarray,
                                 detrend_window_s: Optional[float] = None,
                                 baseline: Optional[np.ndarray] = None,
-                                sigma: Optional[float] = None) -> MatchedFilterResult:
+                                sigma: Optional[np.ndarray] = None,
+                                normalization: Normalization = "empirical",
+                                amp_sigma: Optional[np.ndarray] = None,
+                                sigma_window_s: Optional[float] = None) -> MatchedFilterResult:
     """
     Slide (template_time, template_intensity) -- a noiseless simulated
     diffraction pattern already converted to time, e.g. via
@@ -167,6 +227,34 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         comparison). `baseline` must be the same length as `signal`.
         If omitted (the default), both are computed fresh here exactly
         as before -- every existing caller is unaffected.
+    normalization : {"empirical", "local_block", "global"}
+        How the correlation is turned into an SNR.
+
+        - ``"empirical"`` (default): divide by the rolling robust scatter
+          of the filter output itself (empirical_filter_sigma). Honest for
+          correlated noise: SNR on pure noise has sigma ~ 1 whatever the
+          noise spectrum.
+        - ``"local_block"``: divide by template_norm * the per-block MAD
+          of the residual (``sigma``). This assumes white noise and sees
+          only noise above ~1/(block duration) -- optimistic on red
+          noise. Kept for regression.
+        - ``"global"``: as local_block with one robust sigma for the
+          whole series.
+    sigma_window_s : float, optional
+        Window over which ``normalization="empirical"`` measures the scatter
+        of the filter output. Defaults to the detrend window (20x the
+        template). On noise coherent over many seconds a window this short
+        holds only a few independent samples and the sigma itself fluctuates
+        by tens of percent along the run, which fattens the SNR tails; use a
+        longer window (a few minutes, or the whole run) when the noise is
+        stationary enough.
+    amp_sigma : ndarray, optional
+        Precomputed per-lag filter-output sigma (``MatchedFilterResult.
+        amp_sigma`` of a search on the same template), length
+        ``len(signal) - M + 1``. Overrides ``normalization``. Used by the
+        injection Monte Carlo to normalise every short trial slice with the
+        sigma measured once on the whole uninjected series: measured on the
+        slice itself the estimate scatters ~10 % trial to trial.
 
     Returns
     -------
@@ -202,8 +290,23 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
     # scale >> template), so the local noise at each window's center is
     # the right normaliser for that lag.
     center_offset = M // 2
-    sigma_center = sigma[center_offset:center_offset + len(correlation)]
-    snr = correlation / (template_norm * sigma_center)
+    n_lag = len(correlation)
+    if amp_sigma is not None:
+        amp_sigma = np.asarray(amp_sigma, dtype=float)
+        if len(amp_sigma) != n_lag:
+            raise ValueError(f"amp_sigma has {len(amp_sigma)} lags, expected {n_lag}")
+        normalization = "supplied"
+    elif normalization == "empirical":
+        window_s = sigma_window_s or detrend_window_s or 20.0 * template_duration_s
+        window_samples = max(int(round(window_s / dt)), M)
+        amp_sigma = empirical_filter_sigma(correlation / template_norm, window_samples)
+    elif normalization == "global":
+        amp_sigma = np.full(n_lag, robust_sigma(residual_data))
+    elif normalization == "local_block":
+        amp_sigma = sigma[center_offset:center_offset + n_lag]
+    else:
+        raise ValueError(f"Unknown normalization {normalization!r}")
+    snr = correlation / (template_norm * amp_sigma)
 
     snr_time = time[center_offset:center_offset + len(snr)]
 
@@ -217,10 +320,14 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         data_time=time,
         residual_data=residual_data,
         residual_template=residual_template,
+        amp_sigma=amp_sigma,
+        template_norm=template_norm,
+        normalization=normalization,
     )
 
 
-def shape_veto_chi2(result: MatchedFilterResult, candidate_time_s: float) -> float:
+def shape_veto_chi2(result: MatchedFilterResult, candidate_time_s: float,
+                    weighting: Literal["local_block", "empirical"] = "local_block") -> float:
     """
     Reduced chi-squared of the data around candidate_time_s against the
     *whole* template shape (fringes included), after fitting only its
@@ -245,6 +352,14 @@ def shape_veto_chi2(result: MatchedFilterResult, candidate_time_s: float) -> flo
         Output of sliding_matched_filter_snr on the same data.
     candidate_time_s : float
         Time to test, e.g. from a Candidate returned by find_candidates.
+    weighting : {"local_block", "empirical"}
+        Per-sample noise used to weight the residuals. ``"local_block"``
+        uses result.sigma (white-noise MAD). ``"empirical"`` uses the
+        effective per-sample sigma that reproduces the measured scatter
+        of the filter output, ``amp_sigma`` (flux units; the sigma a white
+        series would need to give the same SNR): for white noise this equals sigma, for red noise it is larger, so chi2/dof
+        is no longer inflated by correlated noise that the SNR already
+        accounts for. Use calibrate_chi2_threshold to set the cut.
 
     Returns
     -------
@@ -260,14 +375,45 @@ def shape_veto_chi2(result: MatchedFilterResult, candidate_time_s: float) -> flo
     amplitude = float(np.sum(window * result.residual_template) / template_norm_sq)
 
     residuals = window - amplitude * result.residual_template
-    local_sigma = result.sigma[start:start + M]
+    if weighting == "empirical":
+        if result.amp_sigma is None:
+            raise ValueError("result carries no amp_sigma; recompute with sliding_matched_filter_snr")
+        lag = int(np.clip(center_idx - M // 2, 0, len(result.amp_sigma) - 1))
+        local_sigma = result.amp_sigma[lag]
+    elif weighting == "local_block":
+        local_sigma = result.sigma[start:start + M]
+    else:
+        raise ValueError(f"Unknown weighting {weighting!r}")
     dof = M - 1
     return float(np.sum((residuals / local_sigma)**2) / dof)
 
 
+def calibrate_chi2_threshold(result: MatchedFilterResult, quantile: float = 0.99,
+                             weighting: Literal["local_block", "empirical"] = "empirical",
+                             n_samples: int = 400, exclude_snr: float = 3.0,
+                             rng: Optional[np.random.Generator] = None) -> Tuple[float, float]:
+    """
+    Calibrate max_chi2_reduced on off-source data: evaluate the shape veto
+    at random lags whose SNR is below ``exclude_snr`` (so real events are
+    not part of the calibration sample) and return
+    (median chi2/dof, quantile chi2/dof). The median should be ~1 on pure
+    noise with the right weighting; the quantile is a data-driven
+    ``max_chi2_reduced``.
+    """
+    rng = rng or np.random.default_rng(0)
+    ok = np.flatnonzero(np.abs(result.snr) < exclude_snr)
+    if ok.size == 0:
+        raise ValueError("no off-source lags below exclude_snr")
+    picks = rng.choice(ok, size=min(n_samples, ok.size), replace=False)
+    chi = np.array([shape_veto_chi2(result, float(result.time[i]), weighting) for i in picks])
+    return float(np.median(chi)), float(np.quantile(chi, quantile))
+
+
 def find_candidates(result: MatchedFilterResult, snr_threshold: float = 5.0,
                      min_separation_s: Optional[float] = None,
-                     max_chi2_reduced: Optional[float] = None) -> List[Candidate]:
+                     max_chi2_reduced: Optional[float] = None,
+                     chi2_weighting: Literal["local_block", "empirical"] = "local_block"
+                     ) -> List[Candidate]:
     """
     Peaks of result.snr above snr_threshold, separated by at least
     min_separation_s (defaults to the template duration, so sidelobes
@@ -289,7 +435,7 @@ def find_candidates(result: MatchedFilterResult, snr_threshold: float = 5.0,
 
     candidates = [
         Candidate(time_s=float(result.time[i]), snr=float(result.snr[i]),
-                  chi2_reduced=shape_veto_chi2(result, float(result.time[i])))
+                  chi2_reduced=shape_veto_chi2(result, float(result.time[i]), chi2_weighting))
         for i in peak_idx
     ]
 

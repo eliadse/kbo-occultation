@@ -5,6 +5,19 @@ from typing import Tuple
 
 import numpy as np
 
+# ── Noise-removal constants (single source of truth) ──────────────────────
+# Butterworth high-pass cutoff used by the "highpass" correction everywhere.
+HIGHPASS_CUTOFF_HZ = 3.0
+# Slow DC report cadence is 1 s (Nyquist 0.5 Hz). The FFT swap must cross
+# over well below it: centre <= 0.8 x DC Nyquist and the whole raised-cosine
+# transition (centre +- DC_TRANSITION_FRAC * centre) below Nyquist. The old
+# 1.0 Hz crossover was above the DC Nyquist, i.e. it imported aliased noise.
+# DC cadence: MAGIC 1 s (Nyquist 0.5 Hz), LST-1 ~2 s (Nyquist 0.25 Hz).
+DC_CUT_HZ = {"m1": 0.3, "m2": 0.3, "lst1": 0.15}
+DC_TRANSITION_FRAC = 0.5
+# Rolling-median window of the smoothed-DC trend (detrend correction).
+DC_DETREND_WINDOW_S = 10.0
+
 @dataclass
 class KBOConfig:
     radius_m: float
@@ -35,7 +48,7 @@ class NumericalConfig:
 
 standard_sampling = 262144 # 2**18
 standard_sample_duration = 2 #ns
-lightcurve_sampling = 50 # [Hz]. 2 * Nyquist freq. From plot_diffraction_psd with r_* = 0.03mas
+lightcurve_sampling = 70 # [Hz]. >= 2 * f99 of the most compact star (r_* = 0.01 mas: f99 = 32 Hz at 25 km/s). See README "Signal band"
 
 
 # ───────────────────────────────────────────────────────────

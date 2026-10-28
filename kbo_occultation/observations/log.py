@@ -16,11 +16,15 @@ Paths in the YAML are resolved against:
   outside the repo).
 
 Absolute paths and ``~`` are accepted everywhere.
+
+A night or an observation with ``exclude: "<reason>"`` is skipped by
+``ObservationLog.select`` (and so by every table and ``kbo-night`` run built on
+it) unless the night is named explicitly or ``include_excluded=True``.
 """
 
 import json
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -68,6 +72,12 @@ class Observation:
     # Channels recording star light (the night's ``channels``).
     channels: List[str] = field(default_factory=list)
     simbad_id: Optional[str] = None
+    # Reason this observation is left out of default selections (None = used).
+    exclude: Optional[str] = None
+
+    @property
+    def is_excluded(self):
+        return self.exclude is not None
 
     @property
     def is_star(self):
@@ -125,6 +135,12 @@ class Night:
     elog_notes: Optional[str]
     manual_conditions: Dict
     observations: Dict[str, Observation]
+    # Reason this night is left out of default selections (None = used).
+    exclude: Optional[str] = None
+
+    @property
+    def is_excluded(self):
+        return self.exclude is not None
 
     @staticmethod
     def telescope(channel) -> config.TelescopeConfig:
@@ -171,15 +187,41 @@ class ObservationLog:
             raise ObservationLogError(f"{night!r}/{observation!r} is not in the observation log "
                            f"(nights: {', '.join(self.nights)})") from None
 
-    def select(self, nights=None) -> List[Night]:
-        """Nights by name; None, [] or ["all"] means every night."""
+    def select(self, nights=None, include_excluded=False) -> List[Night]:
+        """
+        Nights by name; None, [] or ["all"] means every night that is not
+        excluded (named nights are returned even if excluded). Excluded
+        observations are dropped from the returned nights.
+        ``include_excluded=True`` keeps everything.
+        """
         if not nights or list(nights) == ["all"]:
-            return list(self.nights.values())
-        missing = [n for n in nights if n not in self.nights]
-        if missing:
-            raise ObservationLogError(f"not in the observation log: {', '.join(missing)} "
-                           f"(nights: {', '.join(self.nights)})")
-        return [self.nights[n] for n in nights]
+            selected = [n for n in self.nights.values() if include_excluded or not n.is_excluded]
+        else:
+            missing = [n for n in nights if n not in self.nights]
+            if missing:
+                raise ObservationLogError(f"not in the observation log: {', '.join(missing)} "
+                               f"(nights: {', '.join(self.nights)})")
+            selected = [self.nights[n] for n in nights]
+        if include_excluded:
+            return selected
+        return [replace(n, observations={k: o for k, o in n.observations.items() if not o.is_excluded})
+                for n in selected]
+
+    def excluded(self, nights=None) -> List[str]:
+        """
+        "<night>[/<observation>]: <reason>" for everything ``select(nights)``
+        leaves out.
+        """
+        named = set() if not nights or list(nights) == ["all"] else set(nights)
+        out = []
+        for night in self.nights.values():
+            if named and night.name not in named:
+                continue
+            if night.is_excluded and not named:
+                out.append(f"{night.name}: {night.exclude}")
+                continue
+            out += [f"{night.name}/{o.name}: {o.exclude}" for o in night.observations.values() if o.is_excluded]
+        return out
 
     def observation_for_file(self, path):
         """The Observation whose file has the same basename (any extension) as ``path``."""
@@ -197,6 +239,13 @@ def _base_dir(log_path):
 def _cc_root(raw):
     root = os.environ.get("KBO_CC_REPORTS_ROOT") or (raw.get("paths") or {}).get("cc_reports_root")
     return os.path.expanduser(root) if root else None
+
+
+def _exclude(value):
+    """The ``exclude`` field as a reason string (``true`` -> "excluded"), or None."""
+    if value is None or value is False:
+        return None
+    return "excluded" if value is True else str(value)
 
 
 def parse_night(night_name, n, base_dir, cc_root) -> Night:
@@ -221,6 +270,7 @@ def parse_night(night_name, n, base_dir, cc_root) -> Night:
             faulty_mirrors={**night_faulty, **(o.get("faulty_mirrors") or {})},
             channels=channels,
             simbad_id=o.get("simbad_id"),
+            exclude=_exclude(o.get("exclude")),
         )
     return Night(
         name=night_name,
@@ -237,6 +287,7 @@ def parse_night(night_name, n, base_dir, cc_root) -> Night:
         elog_notes=n.get("elog_notes"),
         manual_conditions=dict(n.get("manual_conditions") or {}),
         observations=observations,
+        exclude=_exclude(n.get("exclude")),
     )
 
 
@@ -436,6 +487,7 @@ def nights_table(log: ObservationLog) -> pd.DataFrame:
             "cc_reports": ", ".join(night.cc_reports) or "none",
             "faulty_panels": json.dumps(night.faulty_mirrors),
             "elog_notes": night.elog_notes,
+            "exclude": night.exclude,
         })
     return pd.DataFrame(rows).set_index("night")
 
@@ -463,5 +515,6 @@ def observations_table(log: ObservationLog) -> pd.DataFrame:
             "stop_utc": stop,
             "good_time_s": obs.good_time,
             "notes": obs.notes,
+            "exclude": obs.exclude,
         })
     return pd.DataFrame(rows).set_index(["night", "observation"])

@@ -26,6 +26,7 @@ import glob
 import re
 
 import numpy as np
+from kbo_occultation.analysis.spectra import segmented_welch as _segmented_welch
 import matplotlib
 import matplotlib.pyplot as plt
 from scipy.signal import welch
@@ -42,7 +43,7 @@ os.makedirs(OUT_DIR, exist_ok=True)
 CHANNEL = "A"  # MAGIC-II
 DATA_DIR = f"{PACKAGE_DATA}/observations"
 DC_PKL = f"{DATA_DIR}/DCs/2025_12_16/dc_report.pkl"
-CUTOFF_HZ = 3.5
+from kbo_occultation.config import HIGHPASS_CUTOFF_HZ as CUTOFF_HZ
 DISPLAY_STRIDE = 20  # thin the ~1.7M-point series for legible time-domain plots
 BLOCK_SAMPLES = 200  # samples per point in the binned mean+-error overlay
 
@@ -53,27 +54,8 @@ MAG_B = {
 
 
 def segmented_welch(time, signal, fs, nperseg_target=2**14, min_run_samples=1024):
-    """See examples/studies/2025_12_16/dc_noise_removal_comparison.py -- gap-aware Welch,
-    needed once despike (fill="remove") is in the chain."""
-    dt = 1.0 / fs
-    gaps = np.diff(time)
-    break_idx = np.where(gaps > 1.5 * dt)[0] + 1
-    bounds = np.concatenate([[0], break_idx, [len(time)]])
-
-    freq_common, Pxx_accum, weight_total = None, None, 0
-    for start, stop in zip(bounds[:-1], bounds[1:]):
-        run = signal[start:stop]
-        if len(run) < min_run_samples:
-            continue
-        nperseg = min(nperseg_target, len(run))
-        f, Pxx = welch(run, fs=fs, window="hann", nperseg=nperseg, noverlap=nperseg // 2, scaling="density")
-        if freq_common is None:
-            freq_common = np.linspace(0, fs / 2, nperseg_target // 2 + 1)
-        Pxx_interp = np.interp(freq_common, f, Pxx)
-        weight = len(run)
-        Pxx_accum = Pxx_interp * weight if Pxx_accum is None else Pxx_accum + Pxx_interp * weight
-        weight_total += weight
-    return freq_common, Pxx_accum / weight_total
+    # moved to kbo_occultation.analysis.spectra (default segment there is 2**16); this study keeps 2**14.
+    return _segmented_welch(time, signal, fs, nperseg_target, min_run_samples)
 
 filenames = sorted(glob.glob(f"{DATA_DIR}/Spectrum*20251216T*.npz"))
 raw_lcs = {}

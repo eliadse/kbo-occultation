@@ -28,30 +28,70 @@ def spatial_to_time(x_m: np.ndarray, shadow_velocity_mps: float) -> np.ndarray:
     return np.asarray(x_m) / shadow_velocity_mps
 
 
-def spatial_power_spectrum(x_m: np.ndarray, intensity: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def spatial_power_spectrum(x_m: np.ndarray, intensity: np.ndarray, baseline: Optional[float] = 1.0,
+                           pad_factor: int = 1) -> Tuple[np.ndarray, np.ndarray]:
     """
     Power spectrum of a diffraction pattern I(x), evaluated on its native
     uniform spatial grid.
+
+    Parameters
+    ----------
+    baseline : float or None
+        Level subtracted before the FFT. Default 1.0: the pattern is
+        I -> 1 far from the shadow, so the transform is of the signal
+        (I - 1), which is exactly zero at the truncated edges (no step,
+        no leakage) and keeps the dip's own low-frequency content (its
+        area). ``None`` subtracts the mean instead, which removes that
+        real low-frequency power (the DC bin is zeroed) and leaves a
+        small step at the edges because the mean is slightly below 1.
+    pad_factor : int
+        Zero-pad to ``pad_factor * len(x_m)`` samples. Only interpolates
+        the spectrum (finer frequency grid); it adds no information, but
+        it removes the bin-granularity jumps in quantile estimates.
 
     Returns
     -------
     freq_cyc_per_m : ndarray
         Non-negative spatial frequencies (cycles/m).
     power : ndarray
-        Power spectral density, normalised so its peak is 1.
+        One-sided power spectral density, normalised so its peak is 1.
     """
     x_m = np.asarray(x_m)
     dx = x_m[1] - x_m[0]
 
-    signal = intensity - np.mean(intensity)
-    spectrum = np.abs(np.fft.rfft(signal)) ** 2
-    freq_cyc_per_m = np.fft.rfftfreq(len(x_m), d=dx)
+    ref = np.mean(intensity) if baseline is None else baseline
+    signal = np.asarray(intensity, dtype=float) - ref
+    n_fft = len(x_m) * max(1, int(pad_factor))
+    spectrum = np.abs(np.fft.rfft(signal, n=n_fft)) ** 2
+    freq_cyc_per_m = np.fft.rfftfreq(n_fft, d=dx)
 
     return freq_cyc_per_m, spectrum / spectrum.max()
 
 
+def cumulative_quantile_frequency(freq: np.ndarray, power: np.ndarray, q: float,
+                                  interpolate: bool = True) -> float:
+    """
+    Frequency below which a fraction ``q`` of the total spectral power lies.
+
+    With ``interpolate=True`` the crossing is located linearly between the
+    two bracketing bins; otherwise it is the first bin above the threshold
+    (a step function of the frequency resolution).
+    """
+    cumulative = np.cumsum(power)
+    cumulative = cumulative / cumulative[-1]
+    idx = int(np.searchsorted(cumulative, q, side="right"))
+    if idx >= len(freq):
+        return float(freq[-1])
+    if not interpolate or idx == 0:
+        return float(freq[idx])
+    c0, c1 = cumulative[idx - 1], cumulative[idx]
+    frac = (q - c0) / (c1 - c0) if c1 > c0 else 0.0
+    return float(freq[idx - 1] + frac * (freq[idx] - freq[idx - 1]))
+
+
 def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mps: float,
-                       power_threshold: float = 0.99) -> Tuple[float, float]:
+                       power_threshold: float = 0.99, interpolate: bool = True,
+                       baseline: Optional[float] = 1.0, pad_factor: int = 1) -> Tuple[float, float]:
     """
     Estimate the Nyquist sampling frequency needed to resolve a simulated diffraction 
     light curve, from the pattern's own spatial frequency content. It must be called 
@@ -74,6 +114,11 @@ def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mp
     power_threshold : float
         Fraction of the cumulative spectral power that must be contained
         below the reported bandwidth. Default 0.99 (99% of the power).
+    interpolate : bool
+        Locate the threshold crossing between spectral bins (default)
+        rather than snapping to the first bin above it.
+    baseline, pad_factor :
+        See spatial_power_spectrum.
 
     Returns
     -------
@@ -84,10 +129,10 @@ def nyquist_frequency(x_m: np.ndarray, intensity: np.ndarray, shadow_velocity_mp
     dt_max_s : float
         Corresponding maximum sampling interval, 1 / (2 * f_nyquist_hz).
     """
-    freq_cyc_per_m, power = spatial_power_spectrum(x_m, intensity)
-    cumulative = np.cumsum(power) / np.sum(power)
-    above = freq_cyc_per_m[cumulative > power_threshold]
-    f_max_spatial = float(above[0]) if above.size else 0.0
+    freq_cyc_per_m, power = spatial_power_spectrum(x_m, intensity, baseline=baseline,
+                                                   pad_factor=pad_factor)
+    f_max_spatial = cumulative_quantile_frequency(freq_cyc_per_m, power, power_threshold,
+                                                  interpolate=interpolate)
 
     f_nyquist_hz = f_max_spatial * shadow_velocity_mps
     dt_max_s = 1.0 / (2.0 * f_nyquist_hz) if f_nyquist_hz > 0 else np.inf

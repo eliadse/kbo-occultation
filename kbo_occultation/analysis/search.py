@@ -15,7 +15,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import numpy as np
 
-from ..config import (ArrayConfig, BandpassConfig, GridConfig, KBOConfig,
+from ..config import (HIGHPASS_CUTOFF_HZ, ArrayConfig, BandpassConfig, GridConfig, KBOConfig,
                      NumericalConfig, ORM_ARRAY, StarConfig)
 from .coincidence import (AccidentalRateResult, CoincidenceEvent,
                           TelescopeSearchResult, accidental_coincidence_rate,
@@ -104,7 +104,7 @@ def search_observation(
     response: Optional[Callable] = None,
     kinematics: Optional[Union[ShadowKinematics, float]] = None,
     correction: Union[str, Callable, Dict[str, Callable]] = "raw",
-    highpass_cutoff_hz: float = 1.0,
+    highpass_cutoff_hz: float = HIGHPASS_CUTOFF_HZ,
     snr_threshold: float = 5.0,
     max_chi2_reduced: float = 2.0,
     min_ntel: int = 2,

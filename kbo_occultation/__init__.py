@@ -35,6 +35,7 @@ from .simulation.sweep import (
 from .simulation.detectability import (
     spatial_to_time,
     spatial_power_spectrum,
+    cumulative_quantile_frequency,
     nyquist_frequency,
     resample_to_cadence,
     bin_average,
@@ -57,6 +58,8 @@ from .analysis.matched_filter import (
     compute_baseline_and_sigma,
     sliding_matched_filter_snr,
     shape_veto_chi2,
+    calibrate_chi2_threshold,
+    empirical_filter_sigma,
     find_candidates,
 )
 

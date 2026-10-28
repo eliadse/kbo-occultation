@@ -389,6 +389,9 @@ def run_injection_monte_carlo(
 
     # ─── 4. Per (method, radius): false-alarm profile on the uninjected series ───
     noise_profiles: List[MethodNoiseProfile] = []
+    # Full-series filter-output sigma per (method, radius): the injection trials below are
+    # short slices, and an empirical sigma measured on a slice scatters ~10 % trial to trial.
+    full_amp_sigma = {}
     for method, (corrected_uninjected, baseline, sigma) in method_cache.items():
         for radius_m in radii_m:
             search_time, search_intensity = search_templates[(method, radius_m)]
@@ -396,6 +399,7 @@ def run_injection_monte_carlo(
                 corrected_uninjected.time, corrected_uninjected.signal, search_time, search_intensity,
                 baseline=baseline, sigma=sigma,
             )
+            full_amp_sigma[(method, radius_m)] = mf.amp_sigma
             candidates = find_candidates(mf, snr_threshold=snr_threshold)
             survivors = [c for c in candidates if c.chi2_reduced <= max_chi2_reduced]
             noise_profiles.append(MethodNoiseProfile(
@@ -431,6 +435,7 @@ def run_injection_monte_carlo(
                 local_baseline = cached_baseline[mask]
                 local_sigma = cached_sigma[mask]
 
+                trial_amp_sigma = None
                 if method in per_trial_reshape_methods:
                     # Position-dependent reshaping (e.g. dc_fft_swap): rebuild pinned to
                     # this trial's own t0, so it picks up the real auxiliary data (DC
@@ -440,10 +445,15 @@ def run_injection_monte_carlo(
                     )
                 else:
                     search_time, search_intensity = search_templates[(method, radius_m)]
+                    # Slice of the full-series sigma that this window's lags correspond to.
+                    first = int(np.flatnonzero(mask)[0])
+                    n_lag = len(local_time) - len(np.arange(search_time.min(), search_time.max(),
+                                                            lc.dt)) + 1
+                    trial_amp_sigma = full_amp_sigma[(method, radius_m)][first:first + n_lag]
 
                 mf = sliding_matched_filter_snr(
                     local_time, local_signal, search_time, search_intensity,
-                    baseline=local_baseline, sigma=local_sigma,
+                    baseline=local_baseline, sigma=local_sigma, amp_sigma=trial_amp_sigma,
                 )
                 candidates = find_candidates(mf, snr_threshold=snr_threshold)
                 survivors = [c for c in candidates if c.chi2_reduced <= max_chi2_reduced]

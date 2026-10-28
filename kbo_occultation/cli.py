@@ -7,8 +7,11 @@
                                          channels), build .npz caches + conditions, list what's missing
     kbo-night conditions 2026-10-20      observing conditions per observation
     kbo-night snr 2026-10-20 --plot      measured vs theoretical SNR -> outputs/snr/
+    kbo-night mimic 2025-12-16           candidates, Gaussian surrogates and false-alarm rates -> outputs/mimic/
 
 NIGHT arguments accept several nights; none (or "all") means every night.
+Nights / observations with ``exclude:`` in the log are skipped by ``conditions``
+and ``snr`` unless named (nights) or ``--include-excluded`` is given.
 ``--log`` selects another observation_log.yaml.
 """
 
@@ -35,6 +38,14 @@ def _show(df: pd.DataFrame, csv=None):
         print(f"\nwritten {csv}")
 
 
+def _select(log, args):
+    """log.select for the command's nights, reporting on stderr what was excluded."""
+    if not args.include_excluded:
+        for item in log.excluded(args.nights):
+            print(f"excluded {item} (--include-excluded to use it)", file=sys.stderr)
+    return log.select(args.nights, args.include_excluded)
+
+
 def cmd_list(args):
     log = _load(args)
     table = nights_table(log)
@@ -46,13 +57,13 @@ def cmd_list(args):
         status.append({"night": night.name, "runs": len(obs), "cached": n_cached,
                        "conditions": "yes" if has_cond else ("no" if night.cc_reports else "n/a"),
                        "missing": len(validate(night))})
-    _show(pd.DataFrame(status).set_index("night").join(table[["telescopes", "n_stars", "dark_run"]]))
+    _show(pd.DataFrame(status).set_index("night").join(table[["telescopes", "n_stars", "dark_run", "exclude"]]))
     print(f"\nlog: {log.path}\n`kbo-night missing NIGHT` lists the missing items of a night (read-only);"
           f"\n`kbo-night prepare NIGHT` fills in what it can and lists what's still missing.")
 
 
 def cmd_missing(args):
-    for night in _load(args).select(args.nights):
+    for night in _load(args).select(args.nights, include_excluded=True):
         problems = validate(night)
         print(f"── {night.name}: missing")
         for p in problems:
@@ -76,7 +87,8 @@ def cmd_conditions(args):
     from .observations.cc_reports import conditions_table
 
     log = _load(args)
-    _show(conditions_table(log, args.nights), args.csv)
+    nights = [n.name for n in _select(log, args)]
+    _show(conditions_table(log, nights, args.include_excluded), args.csv)
 
 
 def cmd_snr(args):
@@ -85,9 +97,10 @@ def cmd_snr(args):
     from .analysis.snr import plot_snr_vs_magnitude, snr_report
 
     log = _load(args)
-    nights = [n.name for n in log.select(args.nights)]
-    results = snr_report(log, nights, n_bins=args.bins, detrend_window_s=args.detrend_window)
-    tag = "all" if len(nights) == len(log.nights) else "_".join(nights)
+    nights = [n.name for n in _select(log, args)]
+    results = snr_report(log, nights, n_bins=args.bins, detrend_window_s=args.detrend_window,
+                         include_excluded=args.include_excluded)
+    tag = "all" if not args.nights or args.nights == ["all"] else "_".join(nights)
     os.makedirs(args.out, exist_ok=True)
     csv = os.path.join(args.out, f"snr_{tag}.csv")
     results.to_csv(csv)
@@ -101,6 +114,46 @@ def cmd_snr(args):
             png = os.path.join(args.out, f"snr_{tag}_{n_bin}bin.png")
             fig.savefig(png, dpi=120)
             print(f"written {png}")
+
+
+def cmd_mimic(args):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from .analysis.mimic import (MimicConfig, far_table, flag_enrichment_table, run_mimic, tail_table)
+
+    log = _load(args)
+    nights = [n.name for n in _select(log, args)]
+    cfg = MimicConfig(corrections=tuple(args.corrections), snr_threshold=args.snr_threshold,
+                      n_surrogates=args.surrogates, n_shifts=args.shifts, bin_samples=args.bin_samples,
+                      star_mas=args.star_mas, distance_au=args.distance_au, seed=args.seed,
+                      sigma_window_s=args.sigma_window)
+    res = run_mimic(log, nights, cfg, include_excluded=args.include_excluded,
+                    progress=lambda m: print(m, file=sys.stderr))
+    tag = "all" if not args.nights or args.nights == ["all"] else "_".join(nights)
+    out = os.path.join(args.out, tag)
+    os.makedirs(out, exist_ok=True)
+    far, tails, enrich = far_table(res), tail_table(res), flag_enrichment_table(res)
+    for name, df in (("candidates", res.candidates), ("events", res.events), ("live", res.live),
+                     ("far", far), ("tails", tails), ("flag_enrichment", enrich),
+                     ("calibration", res.calibration)):
+        df.to_csv(os.path.join(out, f"{name}.csv"), index=False)
+    if len(far):
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        for ax, scope in zip(axes, ("single", "coincident")):
+            for (corr, kind), g in far[far.scope == scope].groupby(["correction", "kind"]):
+                ax.errorbar(g.snr_min, g.rate_per_hr.clip(lower=1e-3), g.rate_err, marker="o", ms=3,
+                            ls={"real": "-", "surrogate": "--", "timeslide": ":"}[kind],
+                            label=f"{corr} / {kind}")
+            ax.set(yscale="log", xlabel="SNR >=", ylabel="events / hour", title=scope)
+            ax.grid(alpha=0.3)
+        axes[0].legend(fontsize=6)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, "far.png"), dpi=130)
+    print("\nFalse-alarm rate (events / hour) at SNR >= 5")
+    if len(far):
+        _show(far[far.snr_min == 5.0].set_index(["correction", "scope", "kind"])[["count", "hours", "rate_per_hr", "rate_err"]])
+    print(f"\nwritten {out}/ (candidates, events, live, far, tails, flag_enrichment, calibration .csv, far.png)")
 
 
 def build_parser():
@@ -128,6 +181,7 @@ def build_parser():
     s = sub.add_parser("conditions", help="observing conditions per observation")
     s.add_argument("nights", nargs="*")
     s.add_argument("--csv", help="also write the table to this CSV")
+    s.add_argument("--include-excluded", action="store_true", help="also use nights/observations marked exclude")
     s.set_defaults(func=cmd_conditions)
 
     s = sub.add_parser("snr", help="measured vs theoretical SNR")
@@ -136,12 +190,32 @@ def build_parser():
     s.add_argument("--detrend-window", type=float, default=10.0, help="baseline window for detr [s]")
     s.add_argument("--out", default="outputs/snr", help="output directory")
     s.add_argument("--plot", action="store_true", help="also plot SNR vs magnitude per bin size")
+    s.add_argument("--include-excluded", action="store_true", help="also use nights/observations marked exclude")
     s.set_defaults(func=cmd_snr)
+
+    s = sub.add_parser("mimic", help="how often noise looks like an occultation (candidates, surrogates, FAR)")
+    s.add_argument("nights", nargs="*")
+    s.add_argument("--night", dest="night_opt", action="append", help="night date (same as the positional)")
+    s.add_argument("--corrections", nargs="+", default=["raw", "dc_detrend", "dc_despike"])
+    s.add_argument("--snr-threshold", type=float, default=3.0)
+    s.add_argument("--surrogates", type=int, default=20, help="Gaussian surrogates per run and correction")
+    s.add_argument("--shifts", type=int, default=200, help="time-slide realizations per run")
+    s.add_argument("--bin-samples", type=int, default=10, help="samples averaged before the search")
+    s.add_argument("--star-mas", type=float, default=0.03, help="stellar angular radius of the templates")
+    s.add_argument("--distance-au", type=float, default=40.0)
+    s.add_argument("--sigma-window", type=float, default=None,
+                   help="window [s] of the empirical filter-output sigma (default: detrend window)")
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--out", default="outputs/mimic", help="output directory")
+    s.add_argument("--include-excluded", action="store_true", help="also use nights/observations marked exclude")
+    s.set_defaults(func=cmd_mimic)
     return p
 
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+    if getattr(args, "night_opt", None):
+        args.nights = list(args.nights) + args.night_opt
     warnings.filterwarnings("ignore", category=RuntimeWarning)
     try:
         args.func(args)

@@ -69,7 +69,8 @@ def random_injection_time(time: np.ndarray, x_m: np.ndarray, shadow_velocity_mps
 
 def inject_occultation(time: np.ndarray, signal: np.ndarray, x_m: np.ndarray, intensity: np.ndarray,
                         shadow_velocity_mps: float, t0_s: Optional[float] = None,
-                        rng: Optional[np.random.Generator] = None, window_tol: float = 1e-3) -> InjectionResult:
+                        rng: Optional[np.random.Generator] = None, window_tol: float = 1e-3,
+                        star_fraction: float = 1.0) -> InjectionResult:
     """
     Inject a simulated diffraction pattern (x_m, intensity) into a real
     light curve (time, signal) at time t0_s.
@@ -93,6 +94,13 @@ def inject_occultation(time: np.ndarray, signal: np.ndarray, x_m: np.ndarray, in
         Fractional deviation from 1.0 above which a sample counts as
         "inside" the event, for the purpose of reporting window_s.
 
+    star_fraction : float
+        Fraction of the signal's level that comes from the occulted star.
+        The sky background (NSB) and electronic pedestal are not dimmed by
+        an occultation, so the dip is ``star_fraction * (1 - intensity)``
+        of the signal: injected = signal * (1 - star_fraction*(1-template)).
+        1.0 (default) is the old behaviour (everything occulted).
+
     Returns
     -------
     InjectionResult
@@ -107,6 +115,8 @@ def inject_occultation(time: np.ndarray, signal: np.ndarray, x_m: np.ndarray, in
     # Interpolate in float64, then match the data's dtype so a float32
     # light curve stays float32 downstream (halves per-trial memory).
     template = np.interp(time, t_template, intensity, left=1.0, right=1.0)
+    if star_fraction != 1.0:
+        template = 1.0 - star_fraction * (1.0 - template)
     template = template.astype(signal.dtype, copy=False)
 
     injected_signal = signal * template

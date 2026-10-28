@@ -7,6 +7,9 @@ from astropy import units as u
 from scipy import interpolate
 
 from kbo_occultation import PACKAGE_DATA
+
+# one fast-photometry frame: 2**18 samples x 2 ns
+FRAME_SAMPLES_DURATION_S = 262144 * 2e-9
 reference_files_path = "{}/iact_reference_values".format(PACKAGE_DATA)
 
 def load_response_file(filename):
@@ -253,6 +256,14 @@ class Instrument():
             'VERITAS': 0.7,
             'VERITAS++': 0.7
             }
+
+        # Variance-estimator floor: the fast signal is a variance (std^2) of N
+        # digitizer samples per frame, whose relative error is sqrt(2k/N) with
+        # k the number of effectively independent samples (k ~ 2 measured on
+        # MAGIC, N = 2^18; see the SNR study). LST-1 shows no such floor.
+        self.variance_estimator_k_per_telescope = {t: 0.0 for t in self.excess_noise_factor_per_telescope}
+        self.variance_estimator_k_per_telescope['MAGIC'] = 2.0
+        self.variance_estimator_n_samples = 2 ** 18
 
         # Observatory altitude (m) for the atmospheric scintillation term.
         # Paranal ~2635 m, ORM/La Palma ~2200 m.
@@ -567,15 +578,16 @@ class Instrument():
 
     def noise_budget(self, magnitude, time_binning, ntels=1, airmass=1.0,
                      excess_noise_factor=None, elec_noise_pe=None,
-                     aperture_diameter_m=None, scint_coeff=1.0,
-                     scintillation=True, moon=False, extinction=False,
+                     aperture_diameter_m=None, scint_coeff=1.5,
+                     variance_floor=True, variance_k=None, n_frame_samples=None,
+                     red_noise_rms=0.0, scintillation=True, moon=False, extinction=False,
                      throughput_factor=1.0):
         """
         Per-sample fractional-flux noise budget for a star of apparent
         `magnitude` observed at cadence `time_binning`.
 
         Unlike signal_to_noise_ratio (pure star+NSB shot noise), this combines
-        three physically-motivated terms in quadrature, all expressed as a
+        physically-motivated terms in quadrature, all expressed as a
         fraction of the star signal S (so they are directly comparable to the
         measured std/mean of a real light curve):
 
@@ -589,7 +601,15 @@ class Instrument():
             with D the aperture diameter, X the airmass, h_obs the site
             altitude and H = 8000 m the atmospheric scale height.
 
-        Every variance term is divided by `ntels`, matching
+          - variance-estimator floor (the fast signal is a std^2 estimate from
+            N samples per frame): 2 k / N per frame, independent between
+            frames, so it averages down with the number of frames in a bin
+            (time_binning / frame duration) as well as with `ntels`;
+          - red (correlated) noise of fractional rms `red_noise_rms` in the
+            search band: not reduced by binning or by combining telescopes
+            (the same wind/tracking/transparency hits all of them).
+
+        Every white variance term is divided by `ntels`, matching
         signal_to_noise_ratio. Note scintillation is only partially independent
         between the ~100 m-separated MAGIC/LST dishes, so 1/ntels is a best
         case for that term.
@@ -609,7 +629,16 @@ class Instrument():
             elec_noise_per_telescope, and 2*sqrt(area/pi) respectively).
         scint_coeff : float
             Empirical scaling on the scintillation sigma (Young's coefficient
-            is for a median site; Osborn et al. 2015 find ~1.5 at La Palma).
+            is for a median site; Osborn et al. 2015 find ~1.5 at La Palma,
+            the default).
+        variance_floor : bool
+            Include the variance-estimator floor (default True; zero for
+            telescopes with k = 0, e.g. LST).
+        variance_k, n_frame_samples : float, optional
+            Override k and N of the floor.
+        red_noise_rms : float
+            Fractional rms of the correlated noise in the signal band
+            (e.g. a few 1e-3 after a 3 Hz high-pass; see inband_rms).
         scintillation : bool
             Set False to drop the scintillation term entirely.
         moon : bool
@@ -666,7 +695,16 @@ class Instrument():
         else:
             var_scint = 0.0
 
-        sigma_total = np.sqrt(var_shot + var_elec + var_scint)
+        var_floor = 0.0
+        if variance_floor:
+            k = self.variance_estimator_k_per_telescope[self.telescope_type] if variance_k is None else variance_k
+            n = self.variance_estimator_n_samples if n_frame_samples is None else n_frame_samples
+            frame_s = FRAME_SAMPLES_DURATION_S
+            n_frames = max(1.0, time_binning.to('s').value / frame_s)
+            var_floor = 2.0 * k / n / n_frames / ntels
+        var_red = red_noise_rms ** 2
+
+        sigma_total = np.sqrt(var_shot + var_elec + var_scint + var_floor + var_red)
 
         return {
             'star_photons': S,
@@ -674,6 +712,8 @@ class Instrument():
             'sigma_shot': np.sqrt(var_shot),
             'sigma_elec': np.sqrt(var_elec),
             'sigma_scint': np.sqrt(var_scint),
+            'sigma_floor': np.sqrt(var_floor),
+            'sigma_red': np.sqrt(var_red),
             'sigma_total': sigma_total,
         }
 

@@ -23,7 +23,7 @@ OUT = os.path.join(HERE, "snr_theory_vs_measured.ipynb")
 
 def observation_table(log):
     nights = {}
-    for night in log.nights.values():
+    for night in log.select():
         obs = {}
         for o in night.observations.values():
             obs[o.name] = {
@@ -124,7 +124,7 @@ K_EXT_B = {k_b}                     # B-band extinction coefficient at the ORM [
 N_PANELS = {{"m1": 247, "m2": 247, "lst1": 198}}   # mirror panels per telescope
 N_BINS = (10, 200)                 # samples per SNR bin: ~5 ms (search cadence) and ~100 ms
 DETREND_WINDOW_S = 10.0            # rolling-median baseline of the detrended SNR
-DC_CUT_HZ = {{"m1": 1.0, "m2": 1.0, "lst1": 0.5}}  # fast/DC crossover of the combined signal
+DC_CUT_HZ = {{"m1": 0.3, "m2": 0.3, "lst1": 0.15}}  # fast/DC crossover (config.DC_CUT_HZ)
 
 # From the observation log. good_time: [start, stop] s after the first sample (None = whole
 # run); faulty_mirrors: {{telescope: panels not correctly focused}} (AMC report, median over the run).

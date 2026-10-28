@@ -286,7 +286,7 @@ def pointing_conditions(ra_deg: float, dec_deg: float, t_start: float, t_stop: f
     }
 
 
-def conditions_table(log, nights=None) -> pd.DataFrame:
+def conditions_table(log, nights=None, include_excluded=False) -> pd.DataFrame:
     """
     One row per observation (index night, observation) with its observing
     conditions: Zd/airmass/moon from ``pointing_conditions`` (if the log has
@@ -294,10 +294,11 @@ def conditions_table(log, nights=None) -> pd.DataFrame:
     starguider, pointing; taken from M2's reports, or the first telescope's),
     the AMC panel counts per telescope as ``<tel>_amc_*``, and the night's /
     observation's ``manual`` overrides. Uses the CSV caches written by
-    ``kbo-night prepare``; observations without a .npz cache are skipped.
+    ``kbo-night prepare``; observations without a .npz cache, and those
+    excluded in the log (see ObservationLog.select), are skipped.
     """
     rows = []
-    for night in log.select(nights):
+    for night in log.select(nights, include_excluded):
         cond = load_conditions(night.conditions_dir) if night.conditions_dir else {}
         site_reports = cond.get("m2") or next(iter(cond.values()), {})
         for obs in night.observations.values():

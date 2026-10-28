@@ -73,6 +73,9 @@ class AccidentalRateResult:
     expected_in_live_time: float
     tolerance_s: float
     n_shifts: int
+    # Weakest member SNR of every coincidence found in any shifted
+    # realization, so the background can be counted above an SNR cut.
+    event_min_snr: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
 
 def coincidence_tolerance_s(array: ArrayConfig, kinematics: ShadowKinematics,
@@ -225,6 +228,7 @@ def accidental_coincidence_rate(results: Sequence[TelescopeSearchResult],
 
     rng = np.random.default_rng(seed)
     counts = np.zeros(n_shifts, dtype=int)
+    min_snrs: List[float] = []
 
     for k in range(n_shifts):
         delta = rng.uniform(min_shift_s, live_time_s - min_shift_s)
@@ -245,8 +249,10 @@ def accidental_coincidence_rate(results: Sequence[TelescopeSearchResult],
                 channel=res.channel, telescope=res.telescope, candidates=cands,
                 sigma=res.sigma, live_time_s=res.live_time_s,
             ))
-        counts[k] = len(match_coincidences(shifted, tolerance_s, min_ntel=min_ntel,
-                                           max_pairwise_dt_s=max_pairwise_dt_s))
+        events = match_coincidences(shifted, tolerance_s, min_ntel=min_ntel,
+                                    max_pairwise_dt_s=max_pairwise_dt_s)
+        counts[k] = len(events)
+        min_snrs.extend(min(c.snr for c in ev.members.values()) for ev in events)
 
     mean_count = float(counts.mean())
     return AccidentalRateResult(
@@ -255,4 +261,5 @@ def accidental_coincidence_rate(results: Sequence[TelescopeSearchResult],
         expected_in_live_time=mean_count,
         tolerance_s=tolerance_s,
         n_shifts=n_shifts,
+        event_min_snr=np.asarray(min_snrs, dtype=float),
     )

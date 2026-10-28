@@ -73,9 +73,9 @@ SNR_THRESHOLD = 5.0
 # Reduced-chi2 cutoff for the shape veto (matched_filter.shape_veto_chi2).
 MAX_CHI2_REDUCED = 2.0
 
-HIGHPASS_CUTOFF_HZ = 3.0  # matches examples/studies/2025_12_16/highpass_filter.py
-DC_FREQUENCY_CUT_HZ = 1.0  # matches examples/studies/2025_12_16/dc_combine.py
-DETREND_SMOOTH_WINDOW_S = 10.0
+from kbo_occultation.config import HIGHPASS_CUTOFF_HZ, DC_CUT_HZ, DC_DETREND_WINDOW_S
+DC_FREQUENCY_CUT_HZ = DC_CUT_HZ["m2"]
+DETREND_SMOOTH_WINDOW_S = DC_DETREND_WINDOW_S
 DESPIKE_BASELINE_WINDOW_S = 60.0
 DESPIKE_THRESHOLD_SIGMA = 4.0
 

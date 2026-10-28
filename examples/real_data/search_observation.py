@@ -14,7 +14,7 @@ false-positive rate is measured.
 """
 
 from kbo_occultation.observations.log import load_observation_log
-from kbo_occultation.config import BandpassConfig, GridConfig, NumericalConfig, StarConfig
+from kbo_occultation.config import HIGHPASS_CUTOFF_HZ, BandpassConfig, GridConfig, NumericalConfig, StarConfig
 from kbo_occultation.analysis.search import search_observation
 
 # The observation to use, by night and name in observation_log.yaml.
@@ -34,7 +34,7 @@ result = search_observation(
     grid=GridConfig(x_max_m=4000, n_x=800),
     numerics=NumericalConfig(n_r_grid=3000),
     correction="highpass",
-    highpass_cutoff_hz=3.0,
+    highpass_cutoff_hz=HIGHPASS_CUTOFF_HZ,
     min_ntel=2,
     n_background_shifts=100,
 )
