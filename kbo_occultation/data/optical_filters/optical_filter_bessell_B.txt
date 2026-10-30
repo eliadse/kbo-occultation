@@ -1,0 +1,24 @@
+# Johnson-Bessell B passband, Bessell (1990, PASP 102, 1181) Table 2
+# energy-counting response: divide by wavelength for photon-counting integrals (Bessell & Murphy 2012)
+# columns: wavelength [nm], transmission [%]
+360 0.0
+370 3.0
+380 13.4
+390 56.7
+400 92.0
+410 97.8
+420 100.0
+430 97.8
+440 93.5
+450 85.3
+460 74.0
+470 64.0
+480 53.6
+490 42.4
+500 32.5
+510 23.5
+520 15.0
+530 9.5
+540 4.3
+550 0.9
+560 0.0

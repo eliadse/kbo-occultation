@@ -7,6 +7,9 @@ from astropy import units as u
 from scipy import interpolate
 
 from kbo_occultation import PACKAGE_DATA
+from .physics import vega_photon_density, planck_photon, VEGA_B_MAGNITUDE, nm_m
+
+_trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy 2.0
 
 # one fast-photometry frame: 2**18 samples x 2 ns
 FRAME_SAMPLES_DURATION_S = 262144 * 2e-9
@@ -56,6 +59,17 @@ def combine_responses(*responses):
         return R
 
     return combined
+
+def filter_curve(name, wavelength):
+    """Transmission [0-1] of data/optical_filters/optical_filter_<name>.txt (in %) on `wavelength` [nm]."""
+    # The guess=True addition let's us use any filter file
+    data = ascii.read("{}/optical_filters/optical_filter_{}.txt".format(PACKAGE_DATA, name),
+                    guess=True)
+    f = interpolate.interp1d(data['col1'], data['col2'])
+    result = np.zeros_like(wavelength, dtype=float)
+    mask = np.logical_and(wavelength >= np.min(data['col1']), wavelength <= np.max(data['col1']))
+    result[mask] = f(wavelength[mask])
+    return result/100.
 
 #TODO Add a function that lists all available filters and/or transmission files
 class Instrument():
@@ -110,8 +124,6 @@ class Instrument():
         camera_transmission_per_telescope: Camera transmission of the telescopes
         
         mirror_area_per_telescope: Geometric mirror area BEFORE SHADOWING [m^2]
-        
-        number_of_photons_from_Vega: In different bands [photons cm-2 s-1 A-1]
 
         """
         self.default_wavelengths = np.arange(100, 1000, 1)
@@ -220,20 +232,6 @@ class Instrument():
             'VERITAS++': 100
             }
         
-        # We extract the number of photons from Vega: http://www.astronomy.ohio-state.edu/~martini/usefuldata.html
-        # [photons cm-2 s-1 A-1]
-        self.number_of_photons_from_Vega = {
-            'u': 1539.3,
-            'g': 1134.6,
-            'r': 875.4,
-            'i': 714.5,
-            'z': 602.2,
-            'MAGIC_SII': 356.0,
-            'QE': 2020.2,
-            'MAGIC_QE': 2020.2,
-            'gaia_bp': 9.73
-            }
-
         # Photodetector excess-noise factor F (variance is inflated by F^2
         # relative to pure Poisson shot noise). Values from MAGIC-LST.yml.
         self.excess_noise_factor_per_telescope = {
@@ -449,15 +447,14 @@ class Instrument():
         # If no filter given, return just ones:
         if self.filter_type is None:
             return np.ones_like(wavelength)
-        # Interpolate optical filter transmission for any filter available
-        # The guess=True addition let's us use any filter file
-        data = ascii.read("{}/optical_filters/optical_filter_{}.txt".format(PACKAGE_DATA, self.filter_type),
-                        guess=True)
-        f = interpolate.interp1d(data['col1'], data['col2'])
-        result = np.zeros_like(wavelength, dtype=float)
-        mask = np.logical_and(wavelength >= np.min(data['col1']), wavelength <= np.max(data['col1']))
-        result[mask] = f(wavelength[mask])
-        return result/100.
+        # filter_type='MAGIC_QE' multiplies the QE curve a second time (the response already includes the QE).
+        return filter_curve(self.filter_type, wavelength)
+
+    def response(self, wavelength=None):
+        """Star response: atmosphere x telescope x optical filter (if any)."""
+        if self.filter_type:
+            return self.total_transmission_filter(wavelength)
+        return self.total_transmission(wavelength)
 
     def response_band(self, threshold=0.01, margin_nm=10.0, n_lambda=60):
         """
@@ -466,61 +463,39 @@ class Instrument():
         instead of guessing a bandpass by hand.
         """
         wl = self.default_wavelengths.astype(float)
-        resp = (self.total_transmission_filter(wl) if self.filter_type
-                else self.total_transmission(wl))
+        resp = self.response(wl)
         peak = resp.max()
         above = wl[resp > threshold * peak]
         lam_min = max(wl.min(), above.min() - margin_nm)
         lam_max = min(wl.max(), above.max() + margin_nm)
         return float(lam_min), float(lam_max), n_lambda
 
-# TODO Move the Vega stuff to physics instead. It doesn't make sense to calculate the photons
-#from Vega just using a filter and not the full instrument transmission, so fix that too 
-    @staticmethod
-    def star_flux(wavelength, T):
-        # These are not needed anymore, because I directly calculate everything from Vega filters
-        h = 6.626e-34
-        c = 3.0e+8
-        k = 1.38e-23
-        a = 2.0*h*c**2
-        wavelength = wavelength*1e-9
-        b = h*c/(wavelength*k*T)
-        intensity = a/ ( (wavelength**5) * (np.exp(b) - 1.0) )
-        return intensity
-
-    def star_flux_folded_with_transmission(self, wavelength, T):
-        # These are not needed anymore, because I directly calculate everything from Vega filters
-        selected_filter = 1. if self.filter_type is None else self.optical_filter_transmission(wavelength)
-        return star_flux(wavelength, T) * self.total_transmission(wavelength) * selected_filter
-
-    def num_photons_from_mag(self, obs_times, mag):
+    def star_photon_rate(self, temperature_K=None):
         """
-            The number of photons for a given magnitude is interpolated from the number of photons of Vega.
-            Functions are calculated from 100 to 1000nm
-        """
-        if self.filter_type is None:
-            filter_values = self.total_transmission()
-            photons_from_Vega = self.number_of_photons_from_Vega['QE']
+        Photo-electrons per second from a star of Johnson B = 0 (Vega system), at self.airmass,
+        through the full response (atmosphere x telescope x optical filter, if any).
 
+        The star spectrum is CALSPEC Vega scaled to B = 0 (Vega has B = 0.03) unless temperature_K
+        is given: then a blackbody of that temperature normalised to the same Bessell B photon count.
+        """
+        wl = self.default_wavelengths.astype(float)
+        phi_ref = vega_photon_density(wl) * 10 ** (0.4 * VEGA_B_MAGNITUDE)
+        if temperature_K is not None:
+            s_b = filter_curve("bessell_B", wl) / wl  # photon-counting
+            bb = planck_photon(wl * nm_m, temperature_K)
+            phi = bb * _trapz(s_b * phi_ref, wl) / _trapz(s_b * bb, wl)
         else:
-            filter_values = self.optical_filter_transmission() * self.total_transmission()
-            photons_from_Vega = self.number_of_photons_from_Vega[self.filter_type]
+            phi = phi_ref
+        # 1e4 because going from m2 to cm2, 10 because going from nm to A
+        return self.mirror_area_per_telescope[self.telescope_type] * 1e4 * \
+            _trapz(self.response(wl) * phi, wl) * 10
 
-        f = interpolate.interp1d(self.default_wavelengths, filter_values)
-        #integral = integrate.quad(f, np.min(self.default_wavelengths), np.max(self.default_wavelengths), limit=60)
-        # The quad integration method struggles with functions that are flat and have steep
-        # edges, so it's better to switch to trapz
-        trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy 2.0
-        integral = trapz(f.y, f.x)
-        # 1e3 because going from ms to s
-        # 1e4 because going from m2 to cm2
-        # 10  because going from nm to A
-        num_photons_over_filter = obs_times * 1e-3 * \
-                                self.mirror_area_per_telescope[self.telescope_type] * 1e4 * \
-                                integral * 10 * \
-                                photons_from_Vega
-
-        return num_photons_over_filter / (2.512 ** mag)
+    def num_photons_from_mag(self, obs_times, mag, temperature_K=None):
+        """
+        Star photo-electrons in obs_times [ms] for a star of Johnson B magnitude `mag` (Vega system),
+        whatever the optical filter. See star_photon_rate.
+        """
+        return obs_times * 1e-3 * self.star_photon_rate(temperature_K) * 10 ** (-0.4 * np.asarray(mag))
 
     @staticmethod
     def nsb_spectrum(moon=False):
@@ -557,9 +532,9 @@ class Instrument():
         collection_area = self.mirror_area_per_telescope[self.telescope_type]*pixel_area.to('sr').value
         return number_of_photons*collection_area
 
-    def signal_to_noise_ratio(self, magnitude, time_binning, ntels = 1):
+    def signal_to_noise_ratio(self, magnitude, time_binning, ntels = 1, temperature_K=None):
         # Simple ratio of the photons detected from the star to the photons from the
-        # night sky background magnitude at a given filter for the time binning used.
+        # night sky background (star of Johnson B magnitude `magnitude`) for the time binning used.
         # Uniform sampling required!
         # relative_intensities is the y axis of the diffraction pattern, relative to 'magnitude'
         #
@@ -570,7 +545,7 @@ class Instrument():
         # noise and atmospheric scintillation.
         if not isinstance(time_binning, u.Quantity):
             raise Exception('Wrong input', 'Times needs to have units')
-        num_star_photons = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
+        num_star_photons = self.num_photons_from_mag(time_binning.to('ms').value, magnitude, temperature_K)
         nsb_photons = self.number_nsb_photons(moon=False)*time_binning.to('ns').value
         # Noise level is shot noise (NSB+STAR), divided by sqrt(n telescopes)
         noise_level = np.sqrt(num_star_photons+nsb_photons)/np.sqrt(ntels)
@@ -581,7 +556,7 @@ class Instrument():
                      aperture_diameter_m=None, scint_coeff=1.5,
                      variance_floor=True, variance_k=None, n_frame_samples=None,
                      red_noise_rms=0.0, scintillation=True, moon=False, extinction=False,
-                     throughput_factor=1.0):
+                     throughput_factor=1.0, temperature_K=None):
         """
         Per-sample fractional-flux noise budget for a star of apparent
         `magnitude` observed at cadence `time_binning`.
@@ -617,7 +592,7 @@ class Instrument():
         Parameters
         ----------
         magnitude : float
-            Apparent magnitude in the current filter (unfiltered if None).
+            Johnson B magnitude of the star (Vega system), whatever `filter_type` is.
         time_binning : astropy.units.Quantity
             Sampling cadence (needs time units).
         ntels : int
@@ -652,10 +627,12 @@ class Instrument():
             Extra multiplicative efficiency applied to both the star and the
             NSB photons, e.g. the fraction of mirror area left when some
             panels are faulty, or a measured cloud transmission.
+        temperature_K : float, optional
+            Optional blackbody colour of the star (default: Vega colours, B - V = 0).
 
         Returns
         -------
-        dict with keys star_photons, nsb_photons, sigma_shot, sigma_elec,
+        dict with keys star_photons (photo-electrons: the response includes the QE), nsb_photons, sigma_shot, sigma_elec,
         sigma_scint and sigma_total (all sigmas in fractional-flux units).
         """
         if not isinstance(time_binning, u.Quantity):
@@ -673,7 +650,7 @@ class Instrument():
         if extinction:
             self.set_airmass(airmass)
         try:
-            S = self.num_photons_from_mag(time_binning.to('ms').value, magnitude)
+            S = self.num_photons_from_mag(time_binning.to('ms').value, magnitude, temperature_K)
         finally:
             self.set_airmass(previous_airmass)
         B = self.number_nsb_photons(moon=moon) * time_binning.to('ns').value
@@ -725,7 +702,8 @@ class Instrument():
 
         Same required arguments as signal_to_noise_ratio; extra keyword
         arguments (airmass, scint_coeff, excess_noise_factor, elec_noise_pe,
-        aperture_diameter_m, scintillation, moon, extinction, throughput_factor)
+        aperture_diameter_m, scintillation, moon, extinction, throughput_factor,
+        temperature_K)
         are forwarded to noise_budget.
         """
         budget = self.noise_budget(magnitude, time_binning, ntels=ntels, **kwargs)

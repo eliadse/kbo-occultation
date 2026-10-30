@@ -1,7 +1,7 @@
 """
-Build snr_theory_vs_measured.ipynb: a self-contained notebook (no
-kbo_occultation import) comparing the measured SNR of the test-star
-observations with the theoretical one, for review outside the package.
+Build snr_theory_vs_measured.ipynb: a notebook comparing the measured SNR of the test-star
+observations with the theoretical one, for review outside the package (it imports only
+Instrument, for the star photon counts).
 
 The observation table is taken from the observation log at build time and
 embedded in the notebook; everything else is code ported from the package
@@ -108,6 +108,8 @@ from astropy.io import ascii
 from astropy.time import Time
 from scipy import interpolate
 from scipy.ndimage import median_filter
+
+from kbo_occultation.simulation.instruments import Instrument  # star photon counts
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 pd.set_option("display.width", 250)
@@ -329,10 +331,8 @@ Per-sample fractional noise of the star signal S (photoelectrons per bin), three
 
 $$\\sigma^2 = \\underbrace{F^2\\,\\frac{S + B}{S^2}}_{\\text{shot}} + \\underbrace{\\frac{\\sigma_e^2}{S^2}}_{\\text{electronic}} + \\underbrace{10^{-5}\\,D^{-4/3}\\,X^3\\,e^{-2h/H}\\,/\\,(2t)}_{\\text{scintillation (Young 1967)}}, \\qquad \\mathrm{SNR} = 1/\\sigma$$
 
-- **S**: photons of a star of magnitude m = 2020.2 ph cm⁻² s⁻¹ Å⁻¹ (Vega) × ∫ T(λ) dλ × mirror area × t / 2.512^m,
-  with T(λ) = atmosphere(X) × mirror reflectivity × QE × camera window × telescope × funnel transmission.
-  The Vega photon rate is normalised over the whole unfiltered QE band, so it is neither B nor V;
-  the B magnitude is used (late-B stars, B − V ≈ 0).
+- **S** = photo-electrons of a star of Johnson B magnitude m: CALSPEC Vega spectrum × response, scaled by 10^(−0.4(m − 0.03)),
+  with response T(λ) = atmosphere(X) × mirror reflectivity × QE × camera window × telescope × funnel transmission.
 - **B**: NSB photons in one pixel (dark-sky reference spectrum × telescope transmission × pixel solid angle × mirror area).
 - **Corrections at the observation's conditions:** the atmosphere is evaluated at the run's airmass X
   (extinction), the scintillation term uses the same X, and S and B are multiplied by the mirror throughput
@@ -353,7 +353,6 @@ TELESCOPE = {
             "reflectivity_scale": 1.0, "qe_scale": 1.0, "camera": "LST_transmission_lst_window_No7-10_ave.dat",
             "camera_percent": False},
 }
-VEGA_PHOTONS_QE = 2020.2          # photons cm-2 s-1 A-1, Vega over the unfiltered QE band
 EXCESS_NOISE_F = 1.15
 ELEC_NOISE_PE = 0.7
 SITE_ALTITUDE_M = 2200.0
@@ -393,10 +392,10 @@ def atmospheric_transmission(wavelength, airmass):
 
 
 def star_photons(kind, magnitude, bin_ms, airmass):
-    t = atmospheric_transmission(WAVELENGTHS, airmass) * telescope_transmission(kind, WAVELENGTHS)
-    integral = np.trapezoid(t, WAVELENGTHS) if hasattr(np, "trapezoid") else np.trapz(t, WAVELENGTHS)
-    # ms -> s, m2 -> cm2, nm -> A
-    return bin_ms * 1e-3 * TELESCOPE[kind]["area"] * 1e4 * integral * 10 * VEGA_PHOTONS_QE / 2.512 ** magnitude
+    # CALSPEC Vega x response, from the package (La Palma atmosphere = atm_trans_2147 file)
+    inst = Instrument(kind, site="LaPalma")
+    inst.set_airmass(airmass)
+    return inst.num_photons_from_mag(bin_ms, magnitude)
 
 
 def nsb_photons(kind, bin_ms):

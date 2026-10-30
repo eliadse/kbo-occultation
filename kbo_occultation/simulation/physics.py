@@ -1,8 +1,13 @@
 # kbo_occultation/simulation/physics.py
 
+from functools import lru_cache
+
 import numpy as np
+from astropy.io import fits
 from scipy.special import j0
 from scipy.special import jn
+
+from kbo_occultation import PACKAGE_DATA
 
 
 # ─── Physical constants ─────────────────────────────────────
@@ -11,6 +16,10 @@ AU_m = 1.49598e11
 km_m = 1.0e3
 nm_m = 1.0e-9
 mas_to_rad = np.pi / (180.0 * 3600.0 * 1.0e3)
+H_CGS = 6.62607015e-27     # erg s
+C_CGS = 2.99792458e10      # cm s^-1
+# Johnson magnitude of Vega: V = 0.03, B - V = 0.00 (Bessell & Murphy 2012), so B = 0.03
+VEGA_B_MAGNITUDE = 0.03
 
 
 # ─── Spectral functions ─────────────────────────────────────
@@ -21,6 +30,21 @@ def planck_photon(lam_m, T_K):
     x = h * c / (lam_m * kB * T_K)
     x = np.clip(x, 1e-30, 700)
     return lam_m**(-4) / (np.exp(x) - 1.0)
+
+
+@lru_cache(maxsize=1)
+def _vega_calspec():
+    """CALSPEC alpha_lyr_stis_011: wavelength [A] and photon flux density [ph cm^-2 s^-1 A^-1]."""
+    d = fits.getdata(f"{PACKAGE_DATA}/alpha_lyr_stis_011.fits")
+    lam_a = np.asarray(d["WAVELENGTH"], dtype=float)
+    flam = np.asarray(d["FLUX"], dtype=float)                 # erg s^-1 cm^-2 A^-1
+    return lam_a, flam * lam_a * 1e-8 / (H_CGS * C_CGS)       # f_lambda / (hc / lambda)
+
+
+def vega_photon_density(wl_nm):
+    """Vega (CALSPEC) photon flux density above the atmosphere [ph cm^-2 s^-1 A^-1] at wl_nm."""
+    lam_a, phot = _vega_calspec()
+    return np.interp(np.asarray(wl_nm, dtype=float) * 10.0, lam_a, phot, left=0.0, right=0.0)
 
 
 def filter_transmission(lam_nm, lam_min_nm, lam_max_nm):

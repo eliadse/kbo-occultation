@@ -29,6 +29,7 @@ binned cadence, on the good-time window, NSB subtracted):
 - detr_full / detr_despiked / detr_dcdetrend: detr on the whole run, after
   dropping DC excursions, after dividing out the smoothed DC trend.
 
+Theory uses the Johnson B magnitude with the CALSPEC Vega zero point.
 Theory columns, per band: theo_shot_<band> (shot noise only), theo_zenith_<band>
 (shot x F^2 + electronic + scintillation at the zenith), theo_obs_<band> (same at
 the observation's airmass with extinction, times the mirror area left after
@@ -54,7 +55,7 @@ from .snr_measurement import (dc_to_fast_scale, detrended_snr, measured_snr,
 N_BINS = (10, 20, 200)            # samples per bin: ~5 ms, ~10ms (minimum pattern) and ~100 ms (old SNR plots)
 from ..config import DC_CUT_HZ   # fast/DC crossover (DC cadence: MAGIC 1 s, LST ~2 s)
 DETREND_WINDOW_S = 10.0       # rolling-median baseline for detr (~20x an occultation template)
-BANDS = ("B", "V")
+BANDS = ("B",)
 
 LightCurves = Dict[Tuple[str, str, str], LightCurve]   # (night, observation, channel) -> LightCurve
 

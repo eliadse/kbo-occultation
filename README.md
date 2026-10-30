@@ -556,8 +556,32 @@ area, QE, reflectivity, PMT excess noise, …) are in
 [MAGIC-LST.yml](kbo_occultation/data/iact_reference_values/MAGIC-LST.yml) and
 `simulation/instruments.py`.
 
+### Star photons and magnitude system
+
+`Instrument.num_photons_from_mag` computes the star's photo-electrons as
+
+    N = t · A · 10 · ∫ R(λ) Φ★(λ) dλ · 10^(−0.4 B)      (λ in nm, ×10 for nm→Å, A in cm²)
+    Φ★ = Φ_Vega(λ) · 10^(0.4·0.03)
+
+with R the full response (atmosphere × mirror × QE × funnel × camera × optical filter, if any) and Φ_Vega the
+CALSPEC spectrum `alpha_lyr_stis_011.fits` in photons. Magnitudes are **Johnson B, Vega system** (Vega has B = 0.03),
+whatever the optical filter; the no-filter and SII responses both lie inside Johnson B. The AB system (flat f_ν) is not
+used: B_AB − B_Vega ≈ −0.15 mag and the reference shape differs (AB/Vega photons = 1.13 with no filter, 0.84 with SII).
+Pass `temperature_K` (to `num_photons_from_mag`, `noise_budget`, ...) for a blackbody star normalised to the same
+Bessell B photon count instead of Vega colours.
+
+B = 0 star at airmass 1 (La Palma), effective Φ0 in ph cm⁻² s⁻¹ Å⁻¹:
+
+| Telescope | Filter | photo-electrons / s | Φ0 |
+|-----------|--------|--------------------:|---:|
+| MAGIC | none | 6.83·10¹¹ | 1144 |
+| MAGIC | `MAGIC_SII` | 1.16·10¹¹ | 1552 |
+| LST | none | 1.73·10¹² | 1144 |
+| LST | `MAGIC_SII` | 2.95·10¹¹ | 1552 |
+
 Bundled data (`kbo_occultation/data/`): `optical_filters/` (MAGIC QE / SII / narrow,
-Gaia, SDSS *ugriz*), `Vega_spectrum.txt` and `alpha_lyr_*.fits`, and
+Gaia, SDSS *ugriz*, Johnson `bessell_B`), `Vega_spectrum.txt` and `alpha_lyr_*.fits`
+(`alpha_lyr_stis_011.fits` is the CALSPEC Vega spectrum used for the star photon counts), and
 `iact_reference_values/` (atmospheric transmission, NSB spectra, telescope
 reflectivity / QE curves).
 

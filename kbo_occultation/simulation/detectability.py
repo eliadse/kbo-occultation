@@ -294,8 +294,7 @@ def sigma_from_instrument(instrument, magnitude: float, time_binning, ntels: int
         Configured with the telescope_type / filter_type / site you want to
         evaluate. Its required reference data files must be present.
     magnitude : float
-        Apparent magnitude of the target star, in the instrument's current
-        filter_type (or unfiltered response, if filter_type is None).
+        Johnson B magnitude (Vega system).
     time_binning : astropy.units.Quantity
         Sampling cadence, e.g. ``524.288 * u.us``.
     ntels : int
@@ -306,12 +305,13 @@ def sigma_from_instrument(instrument, magnitude: float, time_binning, ntels: int
         Forwarded to noise_budget when ``realistic=True``.
     **noise_kw :
         Further noise_budget overrides (scint_coeff, excess_noise_factor,
-        elec_noise_pe, aperture_diameter_m, moon).
+        elec_noise_pe, aperture_diameter_m, moon, temperature_K).
     """
     if realistic:
         budget = instrument.noise_budget(
             magnitude, time_binning, ntels=ntels, airmass=airmass,
             scintillation=scintillation, **noise_kw)
         return float(budget['sigma_total'])
-    snr_phot = instrument.signal_to_noise_ratio(magnitude, time_binning, ntels=ntels)
+    snr_phot = instrument.signal_to_noise_ratio(magnitude, time_binning, ntels=ntels,
+                                                  temperature_K=noise_kw.get("temperature_K"))
     return float(1.0 / snr_phot)
