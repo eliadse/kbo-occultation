@@ -156,7 +156,7 @@ nights:
       m1: 35
       m2: 19
       lst1: null  # not in the MAGIC CC reports
-    elog_notes: {m1: 11.15, m2: 9.71, lst1: 46.69}
+    elog_notes: {m1: 9.45, m2: 9.02}
     observations:
       HD-40626:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_HD-40626_10002_20002_20260308T221010.npz
@@ -210,7 +210,7 @@ nights:
       m1: 11  # 10 undefined + 1 error
       m2: 2   # 0 undefined + 2 error
       lst1: null  # not in the MAGIC CC reports
-    elog_notes: {m1: 9.45, m2: 9.02}
+    elog_notes: {m1: 11.15, m2: 9.71, lst1: 46.69}
     observations:
       DarkPatch54:
         file: Spectrum_stats_500MSa_Buff_50Ohm_200mV_15min_DarkPatch54_10002_20002_20260820T005147.npz
