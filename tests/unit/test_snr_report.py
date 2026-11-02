@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from kbo_occultation.analysis.snr import snr_report
+from kbo_occultation.analysis.snr import load_lightcurves, nsb_table, snr_report
 from kbo_occultation.observations.log import load_observation_log
 from kbo_occultation.observations.prepare import build_caches
 
@@ -74,3 +74,77 @@ def test_snr_report_has_inband_noise_columns(white_noise_log):
     # at the variance-flux level, the band holds only a fraction of it
     assert row["mf_sigma"] == pytest.approx(REL_SIGMA, rel=0.3)
     assert 0 < row["inband_rms"] < REL_SIGMA
+
+
+def test_nsb_table_units_and_star_peaks(white_noise_log):
+    fast = nsb_table(white_noise_log, units="fast").iloc[0]
+    assert fast["units"] == "fast" and fast["nsb_source"] == "dark"
+    assert fast["star_mean"] == pytest.approx(STAR_VAR, rel=0.01)
+    # on white noise the "last" peak stops at the first noisy local maximum from the top (~3 sigma)
+    assert fast["star_peak_fast"] == pytest.approx(STAR_VAR, rel=0.05)
+    assert fast["nsb_default"] == fast["nsb_default_fast"] == pytest.approx(NSB_VAR, rel=0.01)
+
+    # no DC report: no dc_scale, so DC-unit levels are NaN but the fast default survives
+    dc = nsb_table(white_noise_log).iloc[0]
+    assert dc["units"] == "dc"
+    assert np.isnan(dc["star_mean"]) and np.isnan(dc["nsb_default"]) and np.isnan(dc["star_peak_comb"])
+    assert dc["nsb_default_fast"] == pytest.approx(NSB_VAR, rel=0.01)
+
+    with pytest.raises(ValueError):
+        nsb_table(white_noise_log, units="volts")
+
+
+DC_SCALE = 4.0
+
+
+@pytest.fixture
+def synthetic_dc(white_noise_log, monkeypatch):
+    """A 1 Hz DC report: on-target pixel follows the runs' levels / DC_SCALE, background pixels sit at the NSB."""
+    from kbo_occultation.analysis import snr, snr_measurement
+    from kbo_occultation.observations import dc_combine
+
+    from kbo_occultation.observations.photometry import LightCurve
+
+    lcs = load_lightcurves(white_noise_log)
+    dark = lcs[("2026-01-01", "dark", "A")]          # the test runs share time stamps: move the dark run 1 h later
+    lcs[("2026-01-01", "dark", "A")] = LightCurve(dark.time + 3600.0, dark.signal, meta=dict(dark.meta))
+    star_lc = lcs[("2026-01-01", "HD-1", "A")]
+    t0, t1 = min(lc.time[0] for lc in lcs.values()) - 60, max(lc.time[-1] for lc in lcs.values()) + 60
+    t = np.arange(t0, t1, 1.0)
+    rng = np.random.default_rng(5)
+
+    def fake_load_dc_series(path, telescope="m2", pixel=0):
+        on_star = (t >= star_lc.time[0]) & (t <= star_lc.time[-1])
+        level = np.where(on_star & (pixel == 0), STAR_VAR, NSB_VAR) / DC_SCALE
+        return t, level * (1 + REL_SIGMA * rng.standard_normal(t.size))
+
+    monkeypatch.setattr(dc_combine, "load_dc_series", fake_load_dc_series)
+    monkeypatch.setattr(snr_measurement, "load_dc_series", fake_load_dc_series)
+    monkeypatch.setattr(snr, "_has_dc", lambda night: True)
+    return lcs
+
+
+def test_nsb_table_dark_comb_peak(white_noise_log, synthetic_dc):
+    row = nsb_table(white_noise_log, lcs=synthetic_dc).iloc[0]
+    assert row["nsb_source"] == "dark_comb_peak" and row["units"] == "dc"
+    assert row["dc_scale"] == pytest.approx(DC_SCALE, rel=0.02)
+    assert row["nsb_default"] == row["nsb_dark_comb_peak"] == pytest.approx(NSB_VAR / DC_SCALE, rel=0.01)
+    assert row["star_peak_comb"] == pytest.approx(STAR_VAR / DC_SCALE, rel=0.05)
+    assert row["star_peak_fast"] == pytest.approx(STAR_VAR / DC_SCALE, rel=0.05)       # converted to DC units
+    assert row["nsb_default_fast"] == pytest.approx(NSB_VAR, rel=0.05)
+
+    fast = nsb_table(white_noise_log, lcs=synthetic_dc, units="fast").iloc[0]
+    assert fast["nsb_dark_comb_peak"] == pytest.approx(NSB_VAR, rel=0.02)
+    assert fast["nsb_dark"] == pytest.approx(NSB_VAR, rel=0.01)
+
+
+def test_gaussian_histogram_peak_ignores_dip_tail():
+    from kbo_occultation.analysis.snr_measurement import gaussian_histogram_peak
+
+    rng = np.random.default_rng(7)
+    core = rng.normal(10.0, 0.2, 9000)
+    dips = rng.uniform(6.0, 9.5, 1000)                # 10 % of the samples in a low tail
+    mu, sigma, amp = gaussian_histogram_peak(np.concatenate([core, dips]))
+    assert mu == pytest.approx(10.0, rel=0.01) and sigma == pytest.approx(0.2, rel=0.15) and amp > 0
+    with pytest.warns(UserWarning):
+        assert np.isnan(gaussian_histogram_peak([1.0, 2.0])[0])

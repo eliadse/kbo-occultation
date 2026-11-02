@@ -73,6 +73,44 @@ def histogram_peak(data, which="last", n_bins=200, min_count=20):
     return float("nan")
 
 
+def gaussian_histogram_peak(data, n_bins=50):
+    """
+    Gaussian fit to the highest peak of the histogram of ``data``: the
+    contiguous bins above half the peak count plus one shoulder bin on each
+    side (as in the snr_study histogram panels), so tails of dips or spikes
+    don't pull the result. Returns (mu, sigma, amplitude); NaNs (with a
+    warning) if the peak spans fewer than 4 bins or the fit fails.
+    """
+    from scipy.optimize import curve_fit
+
+    data = np.asarray(data, dtype=float)
+    data = data[np.isfinite(data)]
+    nan = (float("nan"),) * 3
+    if data.size < 2:
+        warnings.warn("gaussian_histogram_peak: not enough data")
+        return nan
+    counts, edges = np.histogram(data, bins=n_bins)
+    x = 0.5 * (edges[1:] + edges[:-1])
+    k = int(np.argmax(counts))
+    lo = hi = k
+    while lo > 0 and counts[lo - 1] >= 0.5 * counts[k]:
+        lo -= 1
+    while hi < len(counts) - 1 and counts[hi + 1] >= 0.5 * counts[k]:
+        hi += 1
+    lo, hi = max(lo - 1, 0), min(hi + 1, len(counts) - 1)   # include the shoulders
+    if hi - lo < 3:
+        warnings.warn("gaussian_histogram_peak: peak spans fewer than 4 bins")
+        return nan
+    gauss = lambda y, a, m, s: a * np.exp(-0.5 * ((y - m) / s) ** 2)
+    try:
+        (a, m, s), _ = curve_fit(gauss, x[lo:hi + 1], counts[lo:hi + 1],
+                                 p0=[counts[k], x[k], (x[hi] - x[lo]) / 2.35])
+    except (RuntimeError, ValueError):
+        warnings.warn("gaussian_histogram_peak: fit failed")
+        return nan
+    return float(m), float(abs(s)), float(a)
+
+
 def nsb_from_dark(lc_dark: LightCurve, n_bin: int):
     """NSB level and its per-bin standard error from a dark run, binned like the stars."""
     _, signal, sigma = bin_average(lc_dark.time, lc_dark.signal, n_bin)

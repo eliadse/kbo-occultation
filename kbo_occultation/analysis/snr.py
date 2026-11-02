@@ -15,6 +15,9 @@ The steps are also available one by one (``load_lightcurves``,
 ``nsb_table``, ``measured_snr_table``, ``theoretical_snr_table``), e.g. to
 reuse the light curves for diagnostics. Nights / observations marked
 ``exclude`` in the log are skipped unless named or ``include_excluded=True``.
+The NSB is by default the mean of a Gaussian fitted to the main histogram peak
+of the dark run's fast+DC combined signal (``nsb_source`` ``dark_comb_peak``), see ``nsb_table``, whose
+levels are reported in DC units unless ``units="fast"``.
 Measured-SNR columns (all at the
 binned cadence, on the good-time window, NSB subtracted):
 
@@ -43,6 +46,7 @@ from typing import Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from ..simulation.detectability import bin_average
 from ..simulation.physics import teff_from_spectral_type
 from ..observations.cc_reports import conditions_table
 from ..observations.dc_combine import (combine_lightcurve_with_dc, despike_lightcurve_with_dc,
@@ -50,7 +54,7 @@ from ..observations.dc_combine import (combine_lightcurve_with_dc, despike_light
 from ..observations.photometry import LightCurve, good_time_lightcurve
 from .bands import SIGNAL_BAND_HZ, default_template_residual
 from .spectra import noise_band_numbers
-from .snr_measurement import (dc_to_fast_scale, detrended_snr, measured_snr,
+from .snr_measurement import (dc_to_fast_scale, detrended_snr, gaussian_histogram_peak, histogram_peak, measured_snr,
                               nsb_from_dark, nsb_from_dc_background, nsb_from_dc_histogram,
                               throughput_from_faulty_panels)
 
@@ -77,53 +81,97 @@ def _has_dc(night):
     return night.dc_report is not None and os.path.exists(night.dc_report)
 
 
+NSB_FAST_COLUMNS = ("nsb_dark", "nsb_dark_err", "star_mean", "star_peak_fast")              # natively fast (variance) units
+NSB_DC_COLUMNS = ("nsb_dc_bkg", "nsb_dc_hist", "nsb_dark_comb_peak", "nsb_dark_comb_sigma",
+                  "star_peak_comb")                                                     # natively DC units
+
+
 def nsb_table(log, nights=None, n_bin: int = N_BINS[0], lcs: Optional[LightCurves] = None, *,
-              include_excluded=False) -> pd.DataFrame:
+              units: str = "dc", include_excluded=False) -> pd.DataFrame:
     """
     NSB (+ electronic pedestal) level per star observation and telescope
-    (index night, observation, telescope), in fast (variance) units, by three
-    estimators:
+    (index night, observation, telescope), by four estimators:
 
+    - nsb_dark_comb_peak: mean of a Gaussian fitted to the main peak of the
+      histogram of the night's dark run combined with the DC
+      (combine_lightcurve_with_dc, crossover DC_CUT_HZ), binned by N_BINS[1]
+      samples as in the snr_study histogram panels (gaussian_histogram_peak);
+      nsb_dark_comb_sigma is the fitted sigma;
     - nsb_dark: mean of the night's dark run, binned by ``n_bin`` (error: nsb_dark_err);
-    - nsb_dc_bkg: lower DC background pixel during the run, times dc_scale;
-    - nsb_dc_hist: first peak of the on-target DC histogram, times dc_scale
-      (meant for LST-1; wrong if the camera was closed during the report);
+    - nsb_dc_bkg: lower DC background pixel during the run;
+    - nsb_dc_hist: first peak of the on-target DC histogram (meant for LST-1;
+      wrong if the camera was closed during the report);
 
-    and ``nsb_default`` / ``nsb_source``: dark if the night has one, else
-    dc_hist for LST-1 and dc_bkg for MAGIC. ``star_mean`` is the mean fast
-    signal in the good-time window.
+    and ``nsb_default`` / ``nsb_source``: dark_comb_peak if the night has a
+    dark run and a DC report, else dark if it has a dark run, else dc_hist for
+    LST-1 and dc_bkg for MAGIC. Star levels in the good-time window:
+    ``star_mean`` (mean fast signal), ``star_peak_fast`` / ``star_peak_comb``
+    (last histogram peak of the fast signal, before / after combining it with
+    the DC).
+
+    Levels are in DC units (``units="dc"``) or fast variance units
+    (``units="fast"``), converted with the star run's ``dc_scale`` = mean(fast)
+    / mean(on-target DC); without a DC report the other units are NaN.
+    ``nsb_default_fast`` and ``nsb_default_dc`` give the default in both units
+    whatever ``units`` is (``nsb_default_err_fast``: its error, the dark-run one
+    or 0), and the ``units`` column records the choice.
     """
+    if units not in ("dc", "fast"):
+        raise ValueError(f"units must be 'dc' or 'fast', got {units!r}")
     lcs = _lcs(log, nights, lcs, include_excluded)
     rows = []
     for night in log.select(nights, include_excluded):
         for ch in night.channels:
             dc_key = night.telescope(ch).dc_key
             dark = night.dark if night.dark is not None and night.dark.has_cache else None
-            dark_nsb = (nsb_from_dark(good_time_lightcurve(lcs[(night.name, dark.name, ch)], dark.good_time), n_bin)
-                        if dark else None)
+            dark_lc = good_time_lightcurve(lcs[(night.name, dark.name, ch)], dark.good_time) if dark else None
+            dark_nsb = nsb_from_dark(dark_lc, n_bin) if dark else None
+            dark_comb_peak = dark_comb_sigma = np.nan
+            if dark and _has_dc(night):
+                try:
+                    dark_comb = combine_lightcurve_with_dc(dark_lc, night.dc_report, DC_CUT_HZ[dc_key], telescope=dc_key)
+                    _, binned, _ = bin_average(dark_comb.time, dark_comb.signal, N_BINS[1])
+                    dark_comb_peak, dark_comb_sigma, _ = gaussian_histogram_peak(binned)
+                except (ValueError, KeyError):
+                    pass
             for obs in night.stars.values():
                 if not obs.has_cache:
                     continue
                 lc = lcs[(night.name, obs.name, ch)]
+                lc_good = good_time_lightcurve(lc, obs.good_time)
                 row = {"night": night.name, "observation": obs.name, "telescope": night.telescope(ch).name,
                        "dc_key": dc_key, "nsb_dark": dark_nsb[0] if dark_nsb else np.nan,
-                       "nsb_dark_err": dark_nsb[1] if dark_nsb else 0.0, "dc_scale": np.nan}
+                       "nsb_dark_err": dark_nsb[1] if dark_nsb else 0.0, "dc_scale": np.nan,
+                       "nsb_dark_comb_peak": dark_comb_peak, "nsb_dark_comb_sigma": dark_comb_sigma, "nsb_dc_bkg": np.nan, "nsb_dc_hist": np.nan,
+                       "star_mean": float(np.mean(lc_good.signal)),
+                       "star_peak_fast": histogram_peak(lc_good.signal, which="last"), "star_peak_comb": np.nan}
                 if _has_dc(night):
                     try:
                         scale = dc_to_fast_scale(lc, night.dc_report, dc_key)
                         bkg, _ = nsb_from_dc_background(night.dc_report, dc_key, lc.time[0], lc.time[-1])
                         hist, _ = nsb_from_dc_histogram(night.dc_report, dc_key)
-                        row.update({"dc_scale": scale, "nsb_dc_bkg_dc": bkg, "nsb_dc_hist_dc": hist,
-                                    "nsb_dc_bkg": bkg * scale, "nsb_dc_hist": hist * scale})
+                        row.update({"dc_scale": scale, "nsb_dc_bkg": bkg, "nsb_dc_hist": hist})
+                        comb = combine_lightcurve_with_dc(lc_good, night.dc_report, DC_CUT_HZ[dc_key], telescope=dc_key)
+                        row["star_peak_comb"] = histogram_peak(comb.signal, which="last")
                     except (ValueError, KeyError, ZeroDivisionError):
                         pass
-                if dark:
-                    row["nsb_default"], row["nsb_source"] = row["nsb_dark"], "dark"
-                elif dc_key == "lst1":
-                    row["nsb_default"], row["nsb_source"] = row.get("nsb_dc_hist", np.nan), "dc_hist"
+                scale = row["dc_scale"]
+                if np.isfinite(row["nsb_dark_comb_peak"]):
+                    row["nsb_default_dc"], row["nsb_source"] = row["nsb_dark_comb_peak"], "dark_comb_peak"
+                    row["nsb_default_fast"] = row["nsb_default_dc"] * scale
+                elif dark:
+                    row["nsb_default_fast"], row["nsb_source"] = row["nsb_dark"], "dark"
+                    row["nsb_default_dc"] = row["nsb_default_fast"] / scale
                 else:
-                    row["nsb_default"], row["nsb_source"] = row.get("nsb_dc_bkg", np.nan), "dc_bkg"
-                row["star_mean"] = float(np.mean(good_time_lightcurve(lc, obs.good_time).signal))
+                    src = "dc_hist" if dc_key == "lst1" else "dc_bkg"
+                    row["nsb_default_dc"], row["nsb_source"] = row[f"nsb_{src}"], src
+                    row["nsb_default_fast"] = row["nsb_default_dc"] * scale
+                row["nsb_default_err_fast"] = row["nsb_dark_err"] if row["nsb_source"] == "dark" else 0.0
+                if units == "dc":
+                    row.update({c: row[c] / scale for c in NSB_FAST_COLUMNS})
+                else:
+                    row.update({c: row[c] * scale for c in NSB_DC_COLUMNS})
+                row["nsb_default"], row["units"] = row[f"nsb_default_{units}"], units
                 rows.append(row)
     return pd.DataFrame(rows).set_index(["night", "observation", "telescope"])
 
@@ -165,9 +213,10 @@ def measured_snr_table(log, nights=None, n_bins: Sequence[int] = N_BINS, nsb: Op
                     except (ValueError, KeyError):
                         comb = despiked = dctrend = None
                         bad_frac = np.nan
-                nsb_dc = n["nsb_default"] / n["dc_scale"]
-                nsb0 = n["nsb_default"]
-                nsb_err = n["nsb_dark_err"] if n["nsb_source"] == "dark" else 0.0
+                to_fast = n["dc_scale"] if n["units"] == "dc" else 1.0
+                nsb_dc = n["nsb_default_dc"]
+                nsb0 = n["nsb_default_fast"]
+                nsb_err = n["nsb_default_err_fast"]
                 try:
                     band_noise = noise_band_numbers(lc, signal_band_hz, default_template_residual(round(lc.dt, 9)))
                 except ValueError:       # no run long enough for a Welch estimate
@@ -178,7 +227,7 @@ def measured_snr_table(log, nights=None, n_bins: Sequence[int] = N_BINS, nsb: Op
                            "dc_bad_frac": bad_frac, **band_noise,
                            "mean_fast": measured_snr(lc, n_bin, nsb0, nsb_err)["snr"],
                            "peak_fast": measured_snr(lc, n_bin, nsb0, nsb_err, signal="peak")["snr"],
-                           "mean_fast_dcnsb": measured_snr(lc, n_bin, n.get("nsb_dc_bkg", np.nan))["snr"],
+                           "mean_fast_dcnsb": measured_snr(lc, n_bin, n["nsb_dc_bkg"] * to_fast)["snr"],
                            "detr": detrended_snr(lc, n_bin, nsb0, detrend_window_s)["snr"],
                            "detr_full": detrended_snr(lc_full, n_bin, nsb0, detrend_window_s)["snr"]}
                     if comb is not None:
