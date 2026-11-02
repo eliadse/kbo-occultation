@@ -14,27 +14,22 @@ left out of `photon-zeropoint-implementation.md`. Each lists where it lives and 
 3. ✅ _Done: `Instrument(filter_type='MAGIC_QE')` warns and is treated as no filter; the file is kept as reference data_ **`filter_type='MAGIC_QE'` double-counts the QE**: the response already contains the QE curve. Remove the file or treat it as a no-op.
 4. ✅ _Done: dict removed; MAGIC matched the computed NSB, LST was 2.8 % above; notebook keeps it as `LEGACY_NSB`_ **`nsb_per_telescope` dict is unused** and disagrees with the NSB rates computed by `number_nsb_photons`. Remove it or document it as reference values.
 5. ✅ _Done: origin noted in `snr_theo_study.ipynb` and `photon-zeropoint-implementation.md`_ **Origin of the legacy constants** (2020.2 no filter, 356.0 SII, 9.73 gaia_bp) is undocumented. 356 is probably the SDSS u effective wavelength (356 nm) pasted by mistake. If Tarek Hassan's original source turns up, note it in the audit notebook.
-6. **Re-run the filter decision.** With the corrected zero points:
-   - SII star photons go up 4.4× and no-filter ones down 1.77×;
-   - the SII shot-noise SNR penalty shrinks from ~8× to ~2–3×; no filter still wins at B = 6–12 (10 ms).
-   - Re-run `tests/magic_lst_filter_comparison.py` and `tests/observing_time_vs_kbo_size.py` at several magnitudes, and revise the conclusion "no filter wins decisively".
 
 ## Rest of the theoretical SNR (from the snr_theo_study audit)
 
-7. **Scintillation units** (`Instrument.noise_budget`):
+7. ✅ _Done: `scintillation_variance` in `instruments.py`: SI units, 1/t, joined to the short-exposure limit (wind 20 m/s); MAGIC ~7·10⁻⁴ at 10 ms_ **Scintillation units** (`Instrument.noise_budget`):
    - Osborn's coefficient is SI (D in metres), but the code uses D in cm (σ ÷ 21.5) and 1/(2t) instead of 1/t (σ ÷ √2), so σ is ~30× too small.
    - The t^(−1/2) law is only valid for t ≫ D/v (~0.5 s). Below that, scintillation saturates at ~6–7·10⁻⁴.
-8. **PSF containment** is not modelled.
+8. ✅ _Done: `Instrument.psf_containment(psf_mm, 'r39'|'d80')` and `noise_budget(psf_containment=)` (star only); `snr.py` reads `elog_notes` (MAGIC as `r39`, σ = PSF, confirmed by the user 2026-11-02; LST as `d80`)_ **PSF containment** is not modelled.
    - Assumes 100 % of the star light in the pixel.
    - LST-1 (D80 = 46.7 mm) ≈ 87 %.
-   - MAGIC: 98–99.7 % if the logged "PSF 39 %" value is a diameter, 62–77 % if it is σ.
-9. **Hexagonal pixels**: the NSB uses a circular pixel; a hexagon gives NSB × 1.103.
-10. **Variance-estimator floor**:
+   - MAGIC: 62–77 % (logged "PSF 39 %" value is a radius, so σ = PSF; confirmed).
+9. ✅ _Done: `pixel_shape_per_telescope` + `pixel_solid_angle()`; NSB × 1.103 (LST funnel 0.892 left as it was)_ **Hexagonal pixels**: the NSB uses a circular pixel; a hexagon gives NSB × 1.103.
+10. ✅ _Done: floor × ((S+B+P)/S)², k = 250/110 for MAGIC and LST. The 'LST-1 shows no floor' conflict is still open: LST detr/theory is now ~0.11 at 10 ms_ **Variance-estimator floor**:
     - should scale with ((S+B)/S)²;
     - the radiometer equation gives k = 250 MHz / 110 MHz = 2.27, so it should apply to LST-1 too;
     - this conflicts with "LST-1 shows no floor" and is still open.
-11. **MAGIC optics** are LST curves × scalars. The 400 nm efficiency is 0.178 vs 0.096 in MAGIC-LST.yml (halo 70 % × PSF 70 %). Distinct MAGIC QE/reflectivity files would make the model and the light-curve shape genuinely MAGIC.
 12. **Measured NSB is 7–12× the model**: it may be the electronic pedestal or missing star light. A closed-camera run would separate the two.
-13. **Excess-noise factor**: MAGIC-LST.yml calls 1.15 "F⁻¹". Whether it is F or F² changes the shot term by ≤ 15 %.
-14. **Electronic noise** is modelled as a 0.7 p.e. readout per bin, which does not fit a variance-based signal.
-15. **MODTRAN extinction** (k_B ≈ 0.30) is dustier than the log's k_B = 0.23. Star light is ~6 % low at the zenith.
+13. ✅ _Done: taken as F, shot variance × F² (documented, pinned by a test)_ **Excess-noise factor**: MAGIC-LST.yml calls 1.15 "F⁻¹". Whether it is F or F² changes the shot term by ≤ 15 %.
+14. ✅ _Done: per-bin readout term removed; `pedestal_pe_per_ns_per_telescope` (0 until item 12 measures it) enters only the floor_ **Electronic noise** is modelled as a 0.7 p.e. readout per bin, which does not fit a variance-based signal.
+15. ✅ _Done: `Instrument.set_extinction_k_B(k)` rescales τ(λ) to k_B; `snr.instrument_for` passes the log's 0.23_ **MODTRAN extinction** (k_B ≈ 0.30) is dustier than the log's k_B = 0.23. Star light is ~6 % low at the zenith.

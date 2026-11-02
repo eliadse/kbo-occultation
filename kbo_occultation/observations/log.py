@@ -132,7 +132,7 @@ class Night:
     daq: Dict
     dark_run: Optional[str]
     faulty_mirrors: Dict
-    elog_notes: Optional[str]
+    elog_notes: Optional[dict]
     manual_conditions: Dict
     observations: Dict[str, Observation]
     # Reason this night is left out of default selections (None = used).

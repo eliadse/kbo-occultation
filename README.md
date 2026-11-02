@@ -244,8 +244,8 @@ patch on new nights.
 
 **Theory**, per band `B` / `V`, from `Instrument` (`simulation.instruments`):
 - `theo_shot_<band>`: shot noise only;
-- `theo_zenith_<band>`: shot × F² + electronic + scintillation, at the zenith;
-- `theo_obs_<band>`: the same at the observation's airmass, with extinction, times
+- `theo_zenith_<band>`: shot × F² + scintillation (SI units, short-exposure limit) + variance-estimator floor ((S+B)/S)² (radiometer k = 2.27), at the zenith, with the PSF containment of the logged PSF (`psf_containment`; MAGIC value read as a 39 % containment radius (σ = PSF), LST-1 as D80) and a hexagonal pixel for the NSB;
+- `theo_obs_<band>`: the same at the observation's airmass, with extinction (MODTRAN scaled to the log's k_B), times
   the `mirror_throughput` left after the faulty panels.
 
 `ratio_detr_B = detr / theo_obs_B`.
@@ -309,7 +309,7 @@ from kbo_occultation.simulation.instruments import Instrument
 magic = Instrument("MAGIC", site="LaPalma")    # or "LST"; filter_type="MAGIC_SII" (data/optical_filters/)
 magic.signal_to_noise_ratio(7.0, 5 * u.ms)     # shot noise only
 magic.realistic_signal_to_noise_ratio(7.0, 5 * u.ms, airmass=1.2, extinction=True)
-magic.noise_budget(7.0, 5 * u.ms, airmass=1.2) # dict: sigma_shot, sigma_elec, sigma_scint, sigma_floor, sigma_red, sigma_total
+magic.noise_budget(7.0, 5 * u.ms, airmass=1.2) # dict: sigma_shot, sigma_scint, sigma_floor, sigma_red, sigma_total
 band = BandpassConfig(*magic.response_band())  # band covering the instrument response, for compute_lightcurve
 ```
 

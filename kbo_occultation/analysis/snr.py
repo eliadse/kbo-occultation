@@ -193,14 +193,26 @@ def measured_snr_table(log, nights=None, n_bins: Sequence[int] = N_BINS, nsb: Op
 _INSTRUMENTS = {}
 
 
-def instrument_for(telescope_name: str):
-    """The (cached) Instrument model of a telescope: LST for LST-*, MAGIC otherwise, at La Palma."""
+def instrument_for(telescope_name: str, extinction_k_B: Optional[float] = None):
+    """
+    The (cached) Instrument model of a telescope: LST for LST-*, MAGIC otherwise, at La Palma.
+    ``extinction_k_B`` (mag/airmass, e.g. the observation log's) rescales the MODTRAN extinction.
+    """
     from ..simulation.instruments import Instrument
 
     kind = "LST" if telescope_name.startswith("LST") else "MAGIC"
     if kind not in _INSTRUMENTS:
         _INSTRUMENTS[kind] = Instrument(kind, site="LaPalma")
+    _INSTRUMENTS[kind].set_extinction_k_B(extinction_k_B)
     return _INSTRUMENTS[kind]
+
+
+def logged_psf_containment(instr, psf_mm) -> float:
+    """
+    Star light inside the pixel from the PSF logged in elog_notes [mm]: the MAGIC value is the 39 %
+    containment radius ('r39', sigma = PSF), the LST-1 one is D80. 1.0 when nothing was logged.
+    """
+    return instr.psf_containment(psf_mm, "d80" if instr.telescope_type == "LST" else "r39")
 
 
 def theoretical_snr_table(measured: pd.DataFrame, log, conditions: pd.DataFrame,
@@ -217,9 +229,10 @@ def theoretical_snr_table(measured: pd.DataFrame, log, conditions: pd.DataFrame,
     for (night_name, obs_name, tel_name, n_bin), row in measured.iterrows():
         night = log.nights[night_name]
         obs = night.observations[obs_name]
-        instr = instrument_for(tel_name)
+        instr = instrument_for(tel_name, (getattr(log, "site", None) or {}).get("extinction_k", {}).get("B"))
         dc_key = next(night.telescope(ch).dc_key for ch in night.channels
                       if night.telescope(ch).name == tel_name)
+        psf = logged_psf_containment(instr, (night.elog_notes or {}).get(dc_key))
         throughput = throughput_from_faulty_panels(obs.faulty_mirrors.get(dc_key), dc_key)
         airmass = conditions["airmass_mean"].get((night_name, obs_name), np.nan) \
             if "airmass_mean" in conditions else np.nan
@@ -227,17 +240,17 @@ def theoretical_snr_table(measured: pd.DataFrame, log, conditions: pd.DataFrame,
         teff = teff_from_spectral_type(obs.spectral_type)
         out = {"night": night_name, "observation": obs_name, "telescope": tel_name, "n_bin": n_bin,
                "airmass": airmass, "mirror_throughput": throughput,
-               "teff_K": np.nan if teff is None else teff}
+               "teff_K": np.nan if teff is None else teff, "psf_containment": psf}
         for band in bands:
             mag = obs.magnitude(band)
             if mag is None:
                 continue
             out[f"theo_shot_{band}"] = instr.signal_to_noise_ratio(mag, tb, temperature_K=teff)
-            out[f"theo_zenith_{band}"] = instr.realistic_signal_to_noise_ratio(mag, tb, temperature_K=teff)
+            out[f"theo_zenith_{band}"] = instr.realistic_signal_to_noise_ratio(mag, tb, temperature_K=teff, psf_containment=psf)
             if np.isfinite(airmass):
                 out[f"theo_obs_{band}"] = instr.realistic_signal_to_noise_ratio(
                     mag, tb, airmass=airmass, extinction=True, throughput_factor=throughput,
-                    temperature_K=teff)
+                    temperature_K=teff, psf_containment=psf)
         rows.append(out)
     return pd.DataFrame(rows).set_index(["night", "observation", "telescope", "n_bin"])
 

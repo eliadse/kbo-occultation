@@ -17,6 +17,45 @@ _trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy
 FRAME_SAMPLES_DURATION_S = 262144 * 2e-9
 reference_files_path = "{}/iact_reference_values".format(PACKAGE_DATA)
 
+H_SCALE_M = 8000.0                       # atmospheric scale height in the scintillation formulas
+HEX_OVER_CIRCLE = (np.sqrt(3) / 2) / (np.pi / 4)   # hexagon (flat-to-flat d) / circle (diameter d) area = 1.103
+R80_OVER_SIGMA = np.sqrt(2 * np.log(5))  # 2D Gaussian: r80 = 1.794 sigma; r39 = sigma
+# Variance-estimator k from the radiometer equation: Nyquist of the 2 ns samples over the
+# signal bandwidth b_v of MAGIC-LST.yml (250 MHz / 110 MHz).
+RADIOMETER_K = 250e6 / 110e6
+
+
+def scintillation_variance(D_m, t_s, airmass=1.0, altitude_m=2200.0, coeff=1.5, wind_speed_ms=20.0):
+    """
+    Fractional scintillation variance of a star seen through an aperture of diameter D_m [m] in an
+    exposure of t_s [s] (Young 1967, in the form of Osborn et al. 2015 eq. 7, SI units).
+
+    Long exposure (t >> D/v):  sigma^2 = 1e-5 C^2 D^(-4/3) X^3 exp(-2h/H) / t
+    Short exposure (t << D/v): sigma^2 = 17.34 D^(-7/3) X^3 W   (Kenyon et al. 2006), independent of t,
+    with W = int h^2 Cn^2 dh fixed so that both forms agree at the wind speed v.
+    The two are joined as 1/sigma^2 = 1/sigma_short^2 + 1/sigma_long^2.
+    """
+    t_s = np.asarray(t_s, dtype=float)
+    atm = airmass ** 3 * np.exp(-2.0 * altitude_m / H_SCALE_M)
+    long_var = 1e-5 * coeff ** 2 * D_m ** (-4.0 / 3.0) * atm / t_s
+    W = 1e-5 * coeff ** 2 * np.exp(-2.0 * altitude_m / H_SCALE_M) / 10.66 * wind_speed_ms
+    short_var = 17.34 * D_m ** (-7.0 / 3.0) * airmass ** 3 * W
+    return long_var * short_var / (long_var + short_var)
+
+
+def pixel_containment(sigma_mm, flat_mm, shape='hexagon', n=601):
+    """Fraction of a centred circular Gaussian (sigma_mm) inside a pixel of flat-to-flat size flat_mm."""
+    a = flat_mm / 2.0
+    half = a * 2.0 / np.sqrt(3) if shape == 'hexagon' else a
+    x = np.linspace(-half, half, n)
+    X, Y = np.meshgrid(x, x)
+    inside = np.ones_like(X, dtype=bool)
+    angles = [0, 60, 120] if shape == 'hexagon' else [0, 90]
+    for ang in np.deg2rad(angles):
+        inside &= np.abs(X * np.cos(ang) + Y * np.sin(ang)) <= a
+    g = np.exp(-(X ** 2 + Y ** 2) / (2 * sigma_mm ** 2)) / (2 * np.pi * sigma_mm ** 2)
+    return float(g[inside].sum() * (x[1] - x[0]) ** 2)
+
 def load_response_file(filename):
     """
     Load wavelength-dependent response from a text 
@@ -143,6 +182,16 @@ class Instrument():
         # SST-GCT           0.161 deg
         # SST-ASTRI         0.188 deg
 
+        # Pixel shape: the FoV above is the flat-to-flat size. The PMT cameras have hexagonal
+        # pixels (area x 1.103 relative to a circle of that diameter), the pSCT SiPMs are square.
+        self.pixel_shape_per_telescope = {
+            'MAGIC': 'hexagon', 'LST': 'hexagon', 'MST-N': 'hexagon', 'pSCT': 'square',
+            'SST-1M': 'hexagon', 'VERITAS': 'hexagon', 'VERITAS++': 'hexagon'
+            }
+
+        # Focal length [mm], to convert the pixel FoV and the logged PSF to the camera plane.
+        self.focal_length_mm_per_telescope = {'MAGIC': 17000.0, 'LST': 28000.0, 'MST-N': 16000.0}
+
         # Telescope optical PSF requirement FoV:
         # LST               PSF θ_80 of <0.11 degrees, up to 1.2 degrees
         # MST               PSF θ 80 of <0.18 degrees, up to 2.8 degrees
@@ -185,7 +234,7 @@ class Instrument():
 
         self.funnel_transmission_per_telescope = {
             'MAGIC': 0.85,
-            'LST': 0.892,        # tweaked to match the reference LST NSB rate 0.26516 ph/ns/pixel (computed now: 0.2579)
+            'LST': 0.892,        # tweaked to match the reference LST NSB rate 0.26516 ph/ns/pixel with a circular pixel; the pixel is now a hexagon (NSB x 1.103), value left unchanged
             'MST-N': 0.872,
             'pSCT': 1.0,
             'SST-1M': 0.9,
@@ -220,7 +269,8 @@ class Instrument():
             }
         
         # Photodetector excess-noise factor F (variance is inflated by F^2
-        # relative to pure Poisson shot noise). Values from MAGIC-LST.yml.
+        # relative to pure Poisson shot noise). Values from MAGIC-LST.yml, where
+        # the entry is labelled "F^-1"; it is taken to be F itself (shot variance x F^2 = 1.32).
         self.excess_noise_factor_per_telescope = {
             'MAGIC': 1.15,
             'LST': 1.15,
@@ -231,23 +281,21 @@ class Instrument():
             'VERITAS++': 1.15
             }
 
-        # Electronic/readout noise, RMS photoelectrons per sample. From MAGIC-LST.yml.
-        self.elec_noise_per_telescope = {
-            'MAGIC': 0.7,
-            'LST': 0.7,
-            'MST-N': 0.7,
-            'pSCT': 0.7,
-            'SST-1M': 0.7,
-            'VERITAS': 0.7,
-            'VERITAS++': 0.7
-            }
+        # Electronic pedestal: photoelectron-equivalent background per ns that is present with no
+        # light (the variance of the electronics). It adds to the variance the estimator measures
+        # but not to the star signal, so it only enters the floor, through ((S + B + P) / S)^2.
+        # Unmeasured (0): a closed-camera run would give it (see photon-zeropoint-future-fixes.md, item 12).
+        self.pedestal_pe_per_ns_per_telescope = {t: 0.0 for t in self.excess_noise_factor_per_telescope}
 
         # Variance-estimator floor: the fast signal is a variance (std^2) of N
         # digitizer samples per frame, whose relative error is sqrt(2k/N) with
-        # k the number of effectively independent samples (k ~ 2 measured on
-        # MAGIC, N = 2^18; see the SNR study). LST-1 shows no such floor.
+        # k the number of effectively independent samples. Radiometer equation:
+        # k = Nyquist / signal bandwidth = 250 MHz / 110 MHz (b_v in MAGIC-LST.yml) = 2.27,
+        # next to the k ~ 2 measured on MAGIC (N = 2^18; see the SNR study). It applies to
+        # LST-1 too, although the SNR study saw no floor there (open question).
         self.variance_estimator_k_per_telescope = {t: 0.0 for t in self.excess_noise_factor_per_telescope}
-        self.variance_estimator_k_per_telescope['MAGIC'] = 2.0
+        self.variance_estimator_k_per_telescope['MAGIC'] = RADIOMETER_K
+        self.variance_estimator_k_per_telescope['LST'] = RADIOMETER_K
         self.variance_estimator_n_samples = 2 ** 18
 
         # Observatory altitude (m) for the atmospheric scintillation term.
@@ -257,6 +305,10 @@ class Instrument():
         # Airmass at which the atmospheric extinction is evaluated (1 = zenith).
         # See set_airmass / noise_budget(extinction=True).
         self.airmass = 1.0
+
+        # B-band extinction [mag/airmass] to impose on the MODTRAN optical depth, or None to
+        # keep MODTRAN as it is (k_B = 0.30 at La Palma). See set_extinction_k_B.
+        self.extinction_k_B = None
 
         self.transmission = self.total_telescope_transmission()
 
@@ -271,6 +323,14 @@ class Instrument():
         at this airmass instead of at the zenith: transmission = exp(-tau * X).
         """
         self.airmass = float(airmass)
+
+    def set_extinction_k_B(self, k_B):
+        """
+        Scale the MODTRAN optical depth so that the B-band (440 nm) extinction is k_B [mag/airmass]
+        (e.g. the observation log's 0.23, against MODTRAN's 0.30), keeping the MODTRAN wavelength
+        dependence. None restores MODTRAN.
+        """
+        self.extinction_k_B = None if k_B is None else float(k_B)
 
     @staticmethod
     def _normalise_filter(filter_type):
@@ -389,7 +449,11 @@ class Instrument():
         f = interpolate.interp1d(data['wavelength(nm)'], data["100.000"])
         result = np.zeros_like(wavelength, dtype=float)
         mask = np.logical_and(wavelength >= np.min(data['wavelength(nm)']), wavelength <= np.max(data['wavelength(nm)']))
-        result[mask] = np.exp(-self.airmass * f(wavelength[mask]))
+        scale = 1.0
+        if self.extinction_k_B is not None:
+            tau_b = float(f(440.0))
+            scale = self.extinction_k_B / (2.5 * np.log10(np.e) * tau_b)
+        result[mask] = np.exp(-self.airmass * scale * f(wavelength[mask]))
         return result
 
     def total_transmission(self, wavelength=None):
@@ -507,6 +571,33 @@ class Instrument():
         # Note flux is in units of 1 / (nm m^2 ns sr)
         return data
 
+    def pixel_solid_angle(self):
+        """Solid angle of one pixel (deg^2): the FoV is its flat-to-flat size; hexagon, square or circle."""
+        d = self.pixel_FoV_per_telescope[self.telescope_type]
+        shape = self.pixel_shape_per_telescope.get(self.telescope_type, 'circle')
+        area = {'hexagon': np.sqrt(3) / 2 * d ** 2, 'square': d ** 2}.get(shape, np.pi / 4 * d ** 2)
+        return area * u.deg**2
+
+    def psf_containment(self, psf_mm, convention):
+        """
+        Fraction of the light of a centred point source that falls inside one pixel, for a Gaussian PSF
+        given by the logged number `psf_mm` (camera plane) under a stated convention:
+
+          'r39' : 39 % containment RADIUS (a Gaussian holds 39.3 % within r = sigma): sigma = psf (MAGIC elog)
+          'd80' : 80 % containment diameter (LST D80): sigma = psf / (2 sqrt(2 ln 5)) (LST-1 elog)
+
+        An upper limit: mispointing lowers it. Returns 1.0 for psf_mm None/NaN.
+        """
+        if psf_mm is None or not np.isfinite(psf_mm):
+            return 1.0
+        sigmas = {'r39': psf_mm, 'd80': psf_mm / (2.0 * R80_OVER_SIGMA)}
+        if convention not in sigmas:
+            raise ValueError(f"unknown PSF convention {convention!r}; use 'r39' or 'd80'")
+        sigma = sigmas[convention]
+        flat_mm = self.pixel_FoV_per_telescope[self.telescope_type] * np.deg2rad(1.0) * \
+            self.focal_length_mm_per_telescope[self.telescope_type]
+        return pixel_containment(sigma, flat_mm, self.pixel_shape_per_telescope.get(self.telescope_type, 'hexagon'))
+
     def number_nsb_photons(self, moon=False):
         """
         Number of night sky background photons detected in 1ns
@@ -528,7 +619,7 @@ class Instrument():
                             self.total_telescope_transmission(nsb_table['wavelength(nm)'])
         
         number_of_photons = np.sum(nsb_table['flux']*transmission)
-        pixel_area = np.pi*np.power(self.pixel_FoV_per_telescope[self.telescope_type]/2., 2) * u.deg**2
+        pixel_area = self.pixel_solid_angle()
         collection_area = self.mirror_area_per_telescope[self.telescope_type]*pixel_area.to('sr').value
         return number_of_photons*collection_area
 
@@ -552,11 +643,11 @@ class Instrument():
         return num_star_photons/noise_level
 
     def noise_budget(self, magnitude, time_binning, ntels=1, airmass=1.0,
-                     excess_noise_factor=None, elec_noise_pe=None,
-                     aperture_diameter_m=None, scint_coeff=1.5,
+                     excess_noise_factor=None, pedestal_pe_per_ns=None,
+                     aperture_diameter_m=None, scint_coeff=1.5, wind_speed_ms=20.0,
                      variance_floor=True, variance_k=None, n_frame_samples=None,
                      red_noise_rms=0.0, scintillation=True, moon=False, extinction=False,
-                     throughput_factor=1.0, temperature_K=None):
+                     throughput_factor=1.0, temperature_K=None, psf_containment=1.0):
         """
         Per-sample fractional-flux noise budget for a star of apparent
         `magnitude` observed at cadence `time_binning`.
@@ -568,16 +659,15 @@ class Instrument():
 
           - shot noise, inflated by the photodetector excess-noise factor F:
                 F**2 * (S + B) / S**2
-          - electronic/readout noise of `elec_noise_pe` RMS photoelectrons:
-                elec_noise_pe**2 / S**2
-          - atmospheric scintillation (Young 1967), magnitude-independent:
-                scint_coeff**2 * 10e-6 * D_cm**(-4/3) * X**3
-                                * exp(-2 h_obs / H) / (2 t_s)
-            with D the aperture diameter, X the airmass, h_obs the site
-            altitude and H = 8000 m the atmospheric scale height.
+          - atmospheric scintillation (Young 1967 / Osborn et al. 2015),
+            magnitude-independent, see scintillation_variance: long exposure
+                scint_coeff**2 * 1e-5 * D_m**(-4/3) * X**3 * exp(-2 h_obs / H) / t_s
+            (D in metres), saturating at a t-independent value for t << D / v;
 
           - variance-estimator floor (the fast signal is a std^2 estimate from
-            N samples per frame): 2 k / N per frame, independent between
+            N samples per frame): 2 k / N per frame * ((S + B + P) / S)**2, with P
+            the electronic pedestal (the estimator's relative error is relative to the
+            whole variance, not to the star). Independent between
             frames, so it averages down with the number of frames in a bin
             (time_binning / frame duration) as well as with `ntels`;
           - red (correlated) noise of fractional rms `red_noise_rms` in the
@@ -599,16 +689,19 @@ class Instrument():
             Number of telescopes combined.
         airmass : float
             Airmass X = sec(z) of the target. Default 1.0 (zenith).
-        excess_noise_factor, elec_noise_pe, aperture_diameter_m : float, optional
+        excess_noise_factor, pedestal_pe_per_ns, aperture_diameter_m : float, optional
             Override the per-telescope defaults (excess_noise_factor_per_telescope,
-            elec_noise_per_telescope, and 2*sqrt(area/pi) respectively).
+            pedestal_pe_per_ns_per_telescope, and 2*sqrt(area/pi) respectively).
         scint_coeff : float
             Empirical scaling on the scintillation sigma (Young's coefficient
             is for a median site; Osborn et al. 2015 find ~1.5 at La Palma,
             the default).
+        wind_speed_ms : float
+            Turbulence-weighted wind speed (assumed) that sets the short/long-exposure
+            crossover t ~ D / v of the scintillation.
         variance_floor : bool
             Include the variance-estimator floor (default True; zero for
-            telescopes with k = 0, e.g. LST).
+            telescopes with k = 0).
         variance_k, n_frame_samples : float, optional
             Override k and N of the floor.
         red_noise_rms : float
@@ -630,10 +723,15 @@ class Instrument():
         temperature_K : float, optional
             Effective temperature of the star, for the colour term of star_photon_rate
             (default: Vega colours, B - V = 0). See physics.teff_from_spectral_type.
+        psf_containment : float
+            Fraction of the star light inside the pixel (see Instrument.psf_containment).
+            It multiplies the star photons only: the NSB is diffuse, so the light the PSF
+            spreads out of the pixel is replaced by the sky spread in from its neighbours.
+            (throughput_factor, which is collecting area, scales both.)
 
         Returns
         -------
-        dict with keys star_photons (photo-electrons: the response includes the QE), nsb_photons, sigma_shot, sigma_elec,
+        dict with keys star_photons (photo-electrons: the response includes the QE), nsb_photons, sigma_shot,
         sigma_scint and sigma_total (all sigmas in fractional-flux units).
         """
         if not isinstance(time_binning, u.Quantity):
@@ -641,8 +739,8 @@ class Instrument():
 
         if excess_noise_factor is None:
             excess_noise_factor = self.excess_noise_factor_per_telescope[self.telescope_type]
-        if elec_noise_pe is None:
-            elec_noise_pe = self.elec_noise_per_telescope[self.telescope_type]
+        if pedestal_pe_per_ns is None:
+            pedestal_pe_per_ns = self.pedestal_pe_per_ns_per_telescope[self.telescope_type]
         if aperture_diameter_m is None:
             area = self.mirror_area_per_telescope[self.telescope_type]
             aperture_diameter_m = 2.0 * np.sqrt(area / np.pi)
@@ -655,21 +753,18 @@ class Instrument():
         finally:
             self.set_airmass(previous_airmass)
         B = self.number_nsb_photons(moon=moon) * time_binning.to('ns').value
-        S = S * throughput_factor
+        P = pedestal_pe_per_ns * time_binning.to('ns').value * throughput_factor
+        S = S * throughput_factor * psf_containment
         B = B * throughput_factor
 
         # Fractional variances (relative to the star signal S), combined
         # across telescopes as 1/ntels.
         var_shot = excess_noise_factor**2 * (S + B) / S**2 / ntels
-        var_elec = elec_noise_pe**2 / S**2 / ntels
 
         if scintillation:
-            t_s = time_binning.to('s').value
-            D_cm = aperture_diameter_m * 100.0
-            H = 8000.0  # atmospheric scale height (m)
-            var_scint = (scint_coeff**2 * 10e-6 * D_cm**(-4.0 / 3.0) *
-                         airmass**3 * np.exp(-2.0 * self.site_altitude_m / H) /
-                         (2.0 * t_s)) / ntels
+            var_scint = scintillation_variance(
+                aperture_diameter_m, time_binning.to('s').value, airmass, self.site_altitude_m,
+                scint_coeff, wind_speed_ms) / ntels
         else:
             var_scint = 0.0
 
@@ -679,16 +774,15 @@ class Instrument():
             n = self.variance_estimator_n_samples if n_frame_samples is None else n_frame_samples
             frame_s = FRAME_SAMPLES_DURATION_S
             n_frames = max(1.0, time_binning.to('s').value / frame_s)
-            var_floor = 2.0 * k / n / n_frames / ntels
+            var_floor = 2.0 * k / n / n_frames / ntels * ((S + B + P) / S) ** 2
         var_red = red_noise_rms ** 2
 
-        sigma_total = np.sqrt(var_shot + var_elec + var_scint + var_floor + var_red)
+        sigma_total = np.sqrt(var_shot + var_scint + var_floor + var_red)
 
         return {
             'star_photons': S,
             'nsb_photons': B,
             'sigma_shot': np.sqrt(var_shot),
-            'sigma_elec': np.sqrt(var_elec),
             'sigma_scint': np.sqrt(var_scint),
             'sigma_floor': np.sqrt(var_floor),
             'sigma_red': np.sqrt(var_red),
@@ -702,7 +796,7 @@ class Instrument():
         scintillation), i.e. SNR = 1 / sigma_total.
 
         Same required arguments as signal_to_noise_ratio; extra keyword
-        arguments (airmass, scint_coeff, excess_noise_factor, elec_noise_pe,
+        arguments (airmass, scint_coeff, excess_noise_factor, pedestal_pe_per_ns, psf_containment,
         aperture_diameter_m, scintillation, moon, extinction, throughput_factor,
         temperature_K)
         are forwarded to noise_budget.

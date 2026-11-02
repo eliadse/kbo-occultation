@@ -305,7 +305,7 @@ def sigma_from_instrument(instrument, magnitude: float, time_binning, ntels: int
         Forwarded to noise_budget when ``realistic=True``.
     **noise_kw :
         Further noise_budget overrides (scint_coeff, excess_noise_factor,
-        elec_noise_pe, aperture_diameter_m, moon, temperature_K).
+        pedestal_pe_per_ns, aperture_diameter_m, wind_speed_ms, psf_containment, moon, temperature_K).
     """
     if realistic:
         budget = instrument.noise_budget(

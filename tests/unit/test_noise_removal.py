@@ -68,14 +68,16 @@ def test_noise_budget_new_terms():
     tel = Instrument("MAGIC")
     base = tel.noise_budget(6.0, 524.288 * u.us, variance_floor=False, scint_coeff=1.5)
     new = tel.noise_budget(6.0, 524.288 * u.us)
-    assert new["sigma_floor"] == pytest.approx(np.sqrt(2 * 2 / 2 ** 18), rel=1e-6)   # 0.39 %
+    # radiometer k = 250/110, scaled by the whole variance relative to the star: (S + B) / S
+    ratio = (new["star_photons"] + new["nsb_photons"]) / new["star_photons"]
+    assert new["sigma_floor"] == pytest.approx(np.sqrt(2 * (250 / 110) / 2 ** 18) * ratio, rel=1e-6)
     assert new["sigma_total"] > base["sigma_total"]
     assert base["sigma_floor"] == 0.0
     # the floor averages down with the number of frames in a bin, red noise does not
     coarse = tel.noise_budget(6.0, 5 * u.ms, red_noise_rms=2e-3)
     assert coarse["sigma_floor"] < new["sigma_floor"] / 3
     assert coarse["sigma_red"] == pytest.approx(2e-3)
-    assert Instrument("LST").noise_budget(6.0, 524.288 * u.us)["sigma_floor"] == 0.0
+    assert Instrument("LST").noise_budget(6.0, 524.288 * u.us)["sigma_floor"] > 0   # radiometer k applies to LST-1 too
     # default scintillation coefficient is 1.5
     s1 = tel.noise_budget(6.0, 5 * u.ms, scint_coeff=1.0)["sigma_scint"]
     assert tel.noise_budget(6.0, 5 * u.ms)["sigma_scint"] == pytest.approx(1.5 * s1)
