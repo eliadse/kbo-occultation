@@ -23,6 +23,8 @@ Folding the CALSPEC Vega spectrum shipped in `kbo_occultation/data/alpha_lyr_sti
 | no filter, MAGIC & LST | 2020.2 | 1144 | 1289 | 1.77 |
 | `MAGIC_SII` | 356.0 | 1552 | 1305 | 0.23 |
 
+Origin of the old constants: 2020.2 (no filter) and 9.73 (gaia_bp) are undocumented; 356.0 is probably the SDSS u effective wavelength (356 nm) pasted in place of a photon density; the ugriz values are AB zero points (Martini's table).
+
 - **Vega system:** m = 0 means "Vega's spectrum". Vega has B = V = 0.03 (B − V = 0), so a B = 0 star is Vega × 10^(0.4·0.03).
 - **AB system:** m_AB = −2.5 log10(f_ν / 3631 Jy), i.e. a flat f_ν. In photons, Φ_AB = 5.48·10⁶ / λ[Å] ph cm⁻² s⁻¹ Å⁻¹. In B, B_AB − B_Vega ≈ −0.15 mag.
 - Our magnitudes are Vega-system B, so the reference spectrum must be Vega's, not AB.

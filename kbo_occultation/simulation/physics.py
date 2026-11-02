@@ -1,5 +1,6 @@
 # kbo_occultation/simulation/physics.py
 
+import re
 from functools import lru_cache
 
 import numpy as np
@@ -20,6 +21,37 @@ H_CGS = 6.62607015e-27     # erg s
 C_CGS = 2.99792458e10      # cm s^-1
 # Johnson magnitude of Vega: V = 0.03, B - V = 0.00 (Bessell & Murphy 2012), so B = 0.03
 VEGA_B_MAGNITUDE = 0.03
+# Blackbody temperature of Vega's colours: the colour term of star_photon_rate is relative to it
+T_VEGA_K = 9600.0
+
+# Spectral type -> T_eff [K]. B5, B8, B9, B9.5 and A0 are the values of the SNR audit; the rest are
+# main-sequence values from Pecaut & Mamajek (2013). Other subtypes are interpolated.
+SPT_TEFF = {"B0": 31400, "B1": 26000, "B2": 20600, "B3": 17000, "B4": 16400, "B5": 15000, "B6": 14500,
+            "B7": 13500, "B8": 12000, "B9": 10500, "B9.5": 10000, "A0": 9600, "A1": 9300, "A2": 8800,
+            "A3": 8600, "A5": 8140}
+_SPT_RE = re.compile(r"([BA])(\d(?:\.\d)?)")
+
+
+def _spt_ordinal(letter, number):
+    return (0 if letter == "B" else 10) + float(number)
+
+
+_SPT_GRID = np.array(sorted((_spt_ordinal(k[0], k[1:]), v) for k, v in SPT_TEFF.items())).T
+
+
+def teff_from_spectral_type(spt):
+    """
+    T_eff [K] of a B0-A5 spectral type string such as 'B9.5IIIp(HgMn)' (luminosity class and
+    peculiarities are ignored, subtypes between table entries are interpolated). None if `spt`
+    is missing or not a B0-A5 type, meaning 'use Vega colours'.
+    """
+    m = _SPT_RE.match(spt.strip()) if isinstance(spt, str) else None
+    if not m:
+        return None
+    x = _spt_ordinal(*m.groups())
+    if not _SPT_GRID[0, 0] <= x <= _SPT_GRID[0, -1]:
+        return None
+    return float(np.interp(x, *_SPT_GRID))
 
 
 # ─── Spectral functions ─────────────────────────────────────

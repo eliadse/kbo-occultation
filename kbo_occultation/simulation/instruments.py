@@ -1,13 +1,15 @@
 """
 Functions and reference files created and compiled by Tarek Hassan
 """
+import warnings
+
 import numpy as np
 from astropy.io import ascii
 from astropy import units as u
 from scipy import interpolate
 
 from kbo_occultation import PACKAGE_DATA
-from .physics import vega_photon_density, planck_photon, VEGA_B_MAGNITUDE, nm_m
+from .physics import vega_photon_density, planck_photon, VEGA_B_MAGNITUDE, T_VEGA_K, nm_m
 
 _trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy 2.0
 
@@ -80,7 +82,7 @@ class Instrument():
     """
     def __init__(self, telescope_type='MAGIC', filter_type=None, site='Paranal'):
         self.telescope_type = telescope_type
-        self.filter_type = filter_type
+        self.filter_type = self._normalise_filter(filter_type)
         self.site = site
 
         """
@@ -109,8 +111,9 @@ class Instrument():
         -----------
         default_wavelengths: An array from 100 to 1000 nm
 
-        nsb_per_telescope: Night-sky background: [photons/ns/pixel]
-        
+        The night-sky background rate [photons/ns/pixel] is not stored: it is
+        computed from the NSB spectrum by number_nsb_photons.
+
         pixel_FoV_per_telescope: Telescope pixel FoV (diameter)[deg]
         
         mirror_reflectivity_per_telescope: Telescope shadowing?
@@ -127,22 +130,6 @@ class Instrument():
 
         """
         self.default_wavelengths = np.arange(100, 1000, 1)
-
-        self.nsb_per_telescope = {
-            'MAGIC': 0.09770744068777938,
-            'LST': 0.26516,
-            'MST-N': 0.25612,
-            'pSCT': 0.04711,
-            'SST-1M': 0.04068,
-            'VERITAS': 0.0662455616546292,
-            'VERITAS++': 0.0662455616546292
-            }
-
-        # LST NSB photon rate is 0.26516458670986737 ph/ns/pixel
-        # MST-N NSB photon rate is 0.25612364288761486 ph/ns/pixel
-        # pSCT NSB photon rate is 0.017265456577839695 ph/ns/pixel
-        # SST-1M NSB photon rate is 0.04004496264110617 ph/ns/pixel
-        # VERITAS NSB photon rate is 0.08898415585269348 ph/ns/pixel
 
         self.pixel_FoV_per_telescope = {
             'MAGIC': 0.1,
@@ -198,7 +185,7 @@ class Instrument():
 
         self.funnel_transmission_per_telescope = {
             'MAGIC': 0.85,
-            'LST': 0.892,        #tweaked to match the NSB rate used
+            'LST': 0.892,        # tweaked to match the reference LST NSB rate 0.26516 ph/ns/pixel (computed now: 0.2579)
             'MST-N': 0.872,
             'pSCT': 1.0,
             'SST-1M': 0.9,
@@ -285,11 +272,20 @@ class Instrument():
         """
         self.airmass = float(airmass)
 
+    @staticmethod
+    def _normalise_filter(filter_type):
+        """'MAGIC_QE' is the QE curve, which the response already contains: treat it as no filter."""
+        if filter_type == 'MAGIC_QE':
+            warnings.warn("filter_type='MAGIC_QE': the telescope response already includes the QE curve, "
+                          "treating it as no filter", stacklevel=3)
+            return None
+        return filter_type
+
     def set_filter(self, filter_type):
         """
         Set or change the optical filter of the telescope.
         """
-        self.filter_type = filter_type
+        self.filter_type = self._normalise_filter(filter_type)
 
     def mirror_reflectivity(self, wavelength=None):
         if wavelength is None:
@@ -447,7 +443,6 @@ class Instrument():
         # If no filter given, return just ones:
         if self.filter_type is None:
             return np.ones_like(wavelength)
-        # filter_type='MAGIC_QE' multiplies the QE curve a second time (the response already includes the QE).
         return filter_curve(self.filter_type, wavelength)
 
     def response(self, wavelength=None):
@@ -475,20 +470,25 @@ class Instrument():
         Photo-electrons per second from a star of Johnson B = 0 (Vega system), at self.airmass,
         through the full response (atmosphere x telescope x optical filter, if any).
 
-        The star spectrum is CALSPEC Vega scaled to B = 0 (Vega has B = 0.03) unless temperature_K
-        is given: then a blackbody of that temperature normalised to the same Bessell B photon count.
+        The star spectrum is CALSPEC Vega scaled to B = 0 (Vega has B = 0.03). If temperature_K is
+        given, the rate is multiplied by a colour term: the ratio response / Bessell B photons of a
+        blackbody at that temperature over the same ratio at T_VEGA_K (so temperature_K = T_VEGA_K
+        changes nothing, and the Vega spectrum keeps its real shape, e.g. the Balmer jump).
         """
         wl = self.default_wavelengths.astype(float)
-        phi_ref = vega_photon_density(wl) * 10 ** (0.4 * VEGA_B_MAGNITUDE)
-        if temperature_K is not None:
-            s_b = filter_curve("bessell_B", wl) / wl  # photon-counting
-            bb = planck_photon(wl * nm_m, temperature_K)
-            phi = bb * _trapz(s_b * phi_ref, wl) / _trapz(s_b * bb, wl)
-        else:
-            phi = phi_ref
-        # 1e4 because going from m2 to cm2, 10 because going from nm to A
-        return self.mirror_area_per_telescope[self.telescope_type] * 1e4 * \
-            _trapz(self.response(wl) * phi, wl) * 10
+        resp = self.response(wl)
+        phi = vega_photon_density(wl) * 10 ** (0.4 * VEGA_B_MAGNITUDE)
+        rate = self.mirror_area_per_telescope[self.telescope_type] * 1e4 * \
+            _trapz(resp * phi, wl) * 10    # 1e4: m2 -> cm2, 10: nm -> A
+        if temperature_K is None:
+            return rate
+        s_b = filter_curve("bessell_B", wl) / wl  # photon-counting
+
+        def response_over_b(T):
+            bb = planck_photon(wl * nm_m, T)
+            return _trapz(resp * bb, wl) / _trapz(s_b * bb, wl)
+
+        return rate * response_over_b(temperature_K) / response_over_b(T_VEGA_K)
 
     def num_photons_from_mag(self, obs_times, mag, temperature_K=None):
         """
@@ -628,7 +628,8 @@ class Instrument():
             NSB photons, e.g. the fraction of mirror area left when some
             panels are faulty, or a measured cloud transmission.
         temperature_K : float, optional
-            Optional blackbody colour of the star (default: Vega colours, B - V = 0).
+            Effective temperature of the star, for the colour term of star_photon_rate
+            (default: Vega colours, B - V = 0). See physics.teff_from_spectral_type.
 
         Returns
         -------

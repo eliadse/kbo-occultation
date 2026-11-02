@@ -3,7 +3,8 @@ import numpy as np
 import pytest
 
 from kbo_occultation.simulation.instruments import Instrument, filter_curve, _trapz
-from kbo_occultation.simulation.physics import H_CGS, VEGA_B_MAGNITUDE, vega_photon_density
+from kbo_occultation.simulation.physics import (H_CGS, T_VEGA_K, VEGA_B_MAGNITUDE, teff_from_spectral_type,
+                                                vega_photon_density)
 from astropy import units as u
 
 
@@ -62,3 +63,36 @@ def test_noise_budget_temperature():
     default = inst.noise_budget(7.0, 10 * u.ms)
     hot = inst.noise_budget(7.0, 10 * u.ms, temperature_K=12000)
     assert hot["star_photons"] != default["star_photons"]
+
+
+@pytest.mark.parametrize("spt, teff", [("B9.5IIIp(HgMn)", 10000), ("B9IV", 10500), ("B5", 15000), ("A0V", 9600)])
+def test_teff_from_spectral_type(spt, teff):
+    assert teff_from_spectral_type(spt) == pytest.approx(teff)
+
+
+@pytest.mark.parametrize("spt", [None, "garbage", "", "K2V", "A9"])
+def test_teff_unknown_is_none(spt):
+    assert teff_from_spectral_type(spt) is None
+
+
+@pytest.mark.parametrize("tel", ["MAGIC", "LST"])
+def test_colour_term(tel):
+    inst = Instrument(tel, site="LaPalma")
+    assert inst.star_photon_rate(T_VEGA_K) == pytest.approx(inst.star_photon_rate())
+    ratios = [inst.star_photon_rate(T) / inst.star_photon_rate() for T in (10000, 12000, 15000)]
+    assert ratios == sorted(ratios)
+    assert 1.005 <= ratios[-1] / ratios[0] <= 1.07
+
+
+def test_magic_qe_is_no_filter():
+    with pytest.warns(UserWarning, match="MAGIC_QE"):
+        inst = Instrument("MAGIC", filter_type="MAGIC_QE", site="LaPalma")
+    ref = Instrument("MAGIC", site="LaPalma")
+    assert inst.filter_type is None
+    assert inst.star_photon_rate() == ref.star_photon_rate()
+    assert inst.number_nsb_photons() == ref.number_nsb_photons()
+
+
+@pytest.mark.parametrize("tel, nsb", [("MAGIC", 0.0977), ("LST", 0.258)])
+def test_nsb_rate_dark_no_filter(tel, nsb):
+    assert Instrument(tel, site="LaPalma").number_nsb_photons() == pytest.approx(nsb, rel=0.02)

@@ -5,15 +5,15 @@ left out of `photon-zeropoint-implementation.md`. Each lists where it lives and 
 
 ## Related to the photon count
 
-1. **Spectral type → temperature colour term.**
+1. ✅ _Done: `physics.teff_from_spectral_type` + `T_VEGA_K`; `star_photon_rate(temperature_K)` is now a colour term relative to 9600 K (B5: ×1.052, B9: ×1.010); `snr.theoretical_snr_table` passes it and adds `teff_K`. Unknown type = Vega colour_ **Spectral type → temperature colour term.**
    - `Instrument.star_photon_rate(temperature_K=...)` exists, but nothing passes a temperature. `analysis/snr.py` could map `obs.spectral_type` to T_eff (snr_theo_study cell 3 has `SPT_TEFF` and `teff_from_spectral_type`) and pass it to the theory.
    - Effect for the logged B5–B9.5 stars: +0.5 to +6 % star photons.
 2. **Other input bands and systems.**
    - Only Johnson B (Vega) is supported. A `band` / `system` option (V, or AB bands such as SDSS g or Gaia BP) would need the band curve, its system (Vega or AB 3631 Jy) and its Vega magnitude.
    - Not needed while every star has a SIMBAD B magnitude.
-3. **`filter_type='MAGIC_QE'` double-counts the QE**: the response already contains the QE curve. Remove the file or treat it as a no-op.
-4. **`nsb_per_telescope` dict is unused** and disagrees with the NSB rates computed by `number_nsb_photons`. Remove it or document it as reference values.
-5. **Origin of the legacy constants** (2020.2 no filter, 356.0 SII, 9.73 gaia_bp) is undocumented. 356 is probably the SDSS u effective wavelength (356 nm) pasted by mistake. If Tarek Hassan's original source turns up, note it in the audit notebook.
+3. ✅ _Done: `Instrument(filter_type='MAGIC_QE')` warns and is treated as no filter; the file is kept as reference data_ **`filter_type='MAGIC_QE'` double-counts the QE**: the response already contains the QE curve. Remove the file or treat it as a no-op.
+4. ✅ _Done: dict removed; MAGIC matched the computed NSB, LST was 2.8 % above; notebook keeps it as `LEGACY_NSB`_ **`nsb_per_telescope` dict is unused** and disagrees with the NSB rates computed by `number_nsb_photons`. Remove it or document it as reference values.
+5. ✅ _Done: origin noted in `snr_theo_study.ipynb` and `photon-zeropoint-implementation.md`_ **Origin of the legacy constants** (2020.2 no filter, 356.0 SII, 9.73 gaia_bp) is undocumented. 356 is probably the SDSS u effective wavelength (356 nm) pasted by mistake. If Tarek Hassan's original source turns up, note it in the audit notebook.
 6. **Re-run the filter decision.** With the corrected zero points:
    - SII star photons go up 4.4× and no-filter ones down 1.77×;
    - the SII shot-noise SNR penalty shrinks from ~8× to ~2–3×; no filter still wins at B = 6–12 (10 ms).

@@ -29,7 +29,8 @@ binned cadence, on the good-time window, NSB subtracted):
 - detr_full / detr_despiked / detr_dcdetrend: detr on the whole run, after
   dropping DC excursions, after dividing out the smoothed DC trend.
 
-Theory uses the Johnson B magnitude with the CALSPEC Vega zero point.
+Theory uses the Johnson B magnitude with the CALSPEC Vega zero point, times a colour term from the
+star's T_eff (``teff_K``, from the log's spectral type; Vega colours if it has none).
 Theory columns, per band: theo_shot_<band> (shot noise only), theo_zenith_<band>
 (shot x F^2 + electronic + scintillation at the zenith), theo_obs_<band> (same at
 the observation's airmass with extinction, times the mirror area left after
@@ -42,6 +43,7 @@ from typing import Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from ..simulation.physics import teff_from_spectral_type
 from ..observations.cc_reports import conditions_table
 from ..observations.dc_combine import (combine_lightcurve_with_dc, despike_lightcurve_with_dc,
                                        detrend_lightcurve_with_dc)
@@ -222,17 +224,20 @@ def theoretical_snr_table(measured: pd.DataFrame, log, conditions: pd.DataFrame,
         airmass = conditions["airmass_mean"].get((night_name, obs_name), np.nan) \
             if "airmass_mean" in conditions else np.nan
         tb = row["bin_ms"] * u.ms
+        teff = teff_from_spectral_type(obs.spectral_type)
         out = {"night": night_name, "observation": obs_name, "telescope": tel_name, "n_bin": n_bin,
-               "airmass": airmass, "mirror_throughput": throughput}
+               "airmass": airmass, "mirror_throughput": throughput,
+               "teff_K": np.nan if teff is None else teff}
         for band in bands:
             mag = obs.magnitude(band)
             if mag is None:
                 continue
-            out[f"theo_shot_{band}"] = instr.signal_to_noise_ratio(mag, tb)
-            out[f"theo_zenith_{band}"] = instr.realistic_signal_to_noise_ratio(mag, tb)
+            out[f"theo_shot_{band}"] = instr.signal_to_noise_ratio(mag, tb, temperature_K=teff)
+            out[f"theo_zenith_{band}"] = instr.realistic_signal_to_noise_ratio(mag, tb, temperature_K=teff)
             if np.isfinite(airmass):
                 out[f"theo_obs_{band}"] = instr.realistic_signal_to_noise_ratio(
-                    mag, tb, airmass=airmass, extinction=True, throughput_factor=throughput)
+                    mag, tb, airmass=airmass, extinction=True, throughput_factor=throughput,
+                    temperature_K=teff)
         rows.append(out)
     return pd.DataFrame(rows).set_index(["night", "observation", "telescope", "n_bin"])
 
