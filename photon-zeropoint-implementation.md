@@ -2,7 +2,7 @@
 
 Instructions for a coding model working in this repository (`kbo_occultation`). Follow them in order.
 Match the surrounding code style (short comments, numpy, astropy). Do not commit.
-Verification is a separate file (`photon-zeropoint-verification.md`). Out-of-scope items are in `photon-zeropoint-future-fixes.md`; do not do them.
+Verification is a separate file (`photon-zeropoint-verification.md`). Out-of-scope items that are still open are in `pending-fixes.md`.
 
 ## Why
 

@@ -284,7 +284,7 @@ class Instrument():
         # Electronic pedestal: photoelectron-equivalent background per ns that is present with no
         # light (the variance of the electronics). It adds to the variance the estimator measures
         # but not to the star signal, so it only enters the floor, through ((S + B + P) / S)^2.
-        # Unmeasured (0): a closed-camera run would give it (see photon-zeropoint-future-fixes.md, item 12).
+        # Unmeasured (0): a closed-camera run would give it (see pending-fixes.md, item 2).
         self.pedestal_pe_per_ns_per_telescope = {t: 0.0 for t in self.excess_noise_factor_per_telescope}
 
         # Variance-estimator floor: the fast signal is a variance (std^2) of N

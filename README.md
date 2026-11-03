@@ -235,12 +235,23 @@ window, with the NSB subtracted.
 scatter *within* a bin. Noise correlated over one bin or longer is invisible to them,
 so they run high, by about 8 % more at 5 ms from the small-sample bias.
 
-**NSB** (`nsb_source`): the default is the night's dark run if there is one.
-Otherwise it is the first peak of the DC histogram for LST-1 (`dc_hist`) and the
-lower DC background pixel for MAGIC (`dc_bkg`), both converted to fast units with
-mean(fast) / mean(DC). `dc_hist` is wrong if the camera was closed during part of
-the DC report, because the first peak is then the closed-camera level. Take a dark
-patch on new nights.
+**NSB** (`nsb_source`): the default (`dark_comb_peak`) is the mean of a Gaussian
+fitted to the main histogram peak of the night's dark run combined with the DC
+(`gaussian_histogram_peak`, `N_BINS[1]`-sample bins, 50 histogram bins). The fit
+follows only the bins above half the peak height, so dips and spikes don't pull it.
+Without a DC report the default is the dark-run mean (`dark`). Without a dark run it
+is the first peak of the DC histogram for LST-1 (`dc_hist`), or the lower DC
+background pixel for MAGIC (`dc_bkg`). `dc_hist` is wrong if the camera was closed
+during part of the DC report, because the first peak is then the closed-camera level.
+Take a dark patch on new nights.
+
+`nsb_table` reports levels in DC units by default (`units="fast"` for fast variance
+units). The two are converted with the star run's `dc_scale` = mean(fast) / mean(DC).
+`nsb_default_fast` and `nsb_default_dc` give the default in both units whichever
+`units` is chosen; `measured_snr_table` uses them. Converted to fast units, the
+dark-run Gaussian peak is 0.70–0.89× the dark-run mean. That gap comes from the
+DC-to-fast conversion (probably the pedestal the DC doesn't see), not from the
+estimator, so check `nsb_source` before quoting an NSB/star ratio.
 
 **Theory**, per band `B` / `V`, from `Instrument` (`simulation.instruments`):
 - `theo_shot_<band>`: shot noise only;
