@@ -634,6 +634,14 @@ See [PATCH_NOTES.md](PATCH_NOTES.md) for the history of fixes.
 
 ---
 
+## Acknowledgements
+
+This work is part of the project CNS2023-144780 (Consolidación Investigadora 2023),
+funded by MICIU/AEI/10.13039/501100011033 and by the European Union
+NextGenerationEU/PRTR.
+
+---
+
 ## Citation & license
 
 If you use this software in a publication, please cite the authors

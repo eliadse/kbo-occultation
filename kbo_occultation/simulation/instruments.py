@@ -119,7 +119,7 @@ class Instrument():
     A class to compute the transmission of the telescopes and their signal to noise ratio
 
     """
-    def __init__(self, telescope_type='MAGIC', filter_type=None, site='Paranal'):
+    def __init__(self, telescope_type='MAGIC', filter_type=None, site='LaPalma'):
         self.telescope_type = telescope_type
         self.filter_type = self._normalise_filter(filter_type)
         self.site = site
@@ -142,8 +142,9 @@ class Instrument():
             or "MAGIC_" for the MAGIC filters like SII
 
         site: str
-            Telescope site. Set to Paranal
-            Selecting any other selects La Palma stats
+            Telescope site. Set to LaPalma
+            You can select Paranal, but selecting anything 
+            else sets La Palma stats
         
 
         Loaded data
