@@ -116,16 +116,13 @@ class ArrayConfig:
 # Channel mapping (2026 benchmark-star campaign): C = MAGIC-1,
 # A = MAGIC-2, B = LST-1.
 #
-# ENU positions are APPROXIMATE (MAGIC-1 <-> MAGIC-2 ~85 m; LST-1 ~100 m
-# from the MAGIC site). At ~25 km/s shadow velocity 100 m is only ~4 ms
-# -- small against typical template durations -- so approximate
-# positions only pad the coincidence window marginally.
-# TODO(user): replace with surveyed telescope coordinates when available.
+# ENU positions (m) are the surveyed telescope_locations of MAGIC-LST.yml (x = East, y = North, z = up,
+# in the frame of MAGIC-2, so MAGIC-2 is the origin; LST-1 as optimised by I. Jimenez).
 ORM_ARRAY = ArrayConfig(
     telescopes=(
-        TelescopeConfig("MAGIC-1", channel="C", dc_key="m1", east_m=0.0, north_m=0.0),
-        TelescopeConfig("MAGIC-2", channel="A", dc_key="m2", east_m=-60.0, north_m=60.0),
-        TelescopeConfig("LST-1", channel="B", dc_key="lst1", east_m=80.0, north_m=-70.0),
+        TelescopeConfig("MAGIC-1", channel="C", dc_key="m1", east_m=48.1869, north_m=70.6576, up_m=-1.1920),
+        TelescopeConfig("MAGIC-2", channel="A", dc_key="m2", east_m=0.0, north_m=0.0, up_m=0.0),
+        TelescopeConfig("LST-1", channel="B", dc_key="lst1", east_m=-92.3461, north_m=23.3121, up_m=2.4279),
     ),
     latitude_deg=28.7619,
     longitude_deg=-17.8900,

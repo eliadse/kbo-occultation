@@ -1,9 +1,11 @@
 """
 Functions and reference files created and compiled by Tarek Hassan
 """
+import functools
 import warnings
 
 import numpy as np
+import yaml
 from astropy.io import ascii
 from astropy import units as u
 from scipy import interpolate
@@ -23,6 +25,24 @@ R80_OVER_SIGMA = np.sqrt(2 * np.log(5))  # 2D Gaussian: r80 = 1.794 sigma; r39 =
 # Variance-estimator k from the radiometer equation: Nyquist of the 2 ns samples over the
 # signal bandwidth b_v of MAGIC-LST.yml (250 MHz / 110 MHz).
 RADIOMETER_K = 250e6 / 110e6
+# Centre of the MAGIC SII filter: the wavelength where MAGIC-LST.yml quotes the QE and the plexiglass + cones.
+SII_CENTRE_NM = 420.0
+REFLECTIVITY_REF_NM = 400.0   # wavelength of the yml mirror reflectivity
+
+
+@functools.lru_cache(maxsize=None)
+def magic_lst_constants():
+    """
+    Per-telescope constants of MAGIC-LST.yml, as {'MAGIC': {...}, 'LST': {...}} (M2 stands for MAGIC,
+    LST1 for LST). Keys: area, diameter, alpha_QE, reflectivity_400nm, halo, plexi_winston, others.
+    """
+    with open("{}/iact_reference_values/MAGIC-LST.yml".format(PACKAGE_DATA)) as fh:
+        obs = yaml.safe_load(fh)["observatory"]
+    consts = obs["constants"]
+    keys = {"area": consts["area"], "alpha_QE": consts["alpha_QE"], "diameter": obs["telescope_diameters"]}
+    for k in ("reflectivity_400nm", "halo", "plexi_winston", "others"):
+        keys[k] = consts[k]
+    return {tel: {k: float(v[i]) for k, v in keys.items()} for tel, i in (("MAGIC", 0), ("LST", 2))}
 
 
 def scintillation_variance(D_m, t_s, airmass=1.0, altitude_m=2200.0, coeff=1.5, wind_speed_ms=20.0):
@@ -222,10 +242,12 @@ class Instrument():
             'VERITAS++': 'LST_qe_R11920-100-02.dat'
             }
 
-        # Transmission per telescope ('telescope_transmission' in simtel_array)
+        # Transmission per telescope ('telescope_transmission' in simtel_array).
+        # MAGIC and LST: the "others" term of MAGIC-LST.yml.
+        yml = magic_lst_constants()
         self.transmission_per_telescope = {
-            'MAGIC': 0.8928,
-            'LST': 0.9606,
+            'MAGIC': yml['MAGIC']['others'],
+            'LST': yml['LST']['others'],
             'MST-N': 0.8928,
             'pSCT': 0.81,
             'SST-1M': 0.82,
@@ -233,9 +255,10 @@ class Instrument():
             'VERITAS++': 0.8928
             }
 
+        # MAGIC and LST are set below, once the camera window is known: window x funnel = plexi_winston of the yml.
         self.funnel_transmission_per_telescope = {
-            'MAGIC': 0.85,
-            'LST': 0.892,        # tweaked to match the reference LST NSB rate 0.26516 ph/ns/pixel with a circular pixel; the pixel is now a hexagon (NSB x 1.103), value left unchanged
+            'MAGIC': 1.0,
+            'LST': 1.0,
             'MST-N': 0.872,
             'pSCT': 1.0,
             'SST-1M': 0.9,
@@ -255,8 +278,8 @@ class Instrument():
 
         # If no source is specified, the number is coming from here: https://www.mpi-hd.mpg.de/hfm/CTA/MC/Prod4/Config/Efficiencies/
         self.mirror_area_per_telescope = {
-            'MAGIC': 240,
-            'LST': 380.271, # on-axis, before shadowing
+            'MAGIC': yml['MAGIC']['area'],   # MAGIC-LST.yml
+            'LST': yml['LST']['area'],       # MAGIC-LST.yml (Prod4 on-axis: 380.271)
         #    'LST': 391.0, #   Total mirror surface area: 391.0 m**2 from https://forge.in2p3.fr/projects/cta/repository/entry/ASWG/Simulations/MCModelDescription/trunk/datFiles/mirror_CTA-LST-flen_grouped.dat
             'MST-N': 99.03300, # on-axis, before shadowing
         #    'MST-N': 107.2, # Total mirror surface area: 107.2 m**2 from https://forge.in2p3.fr/projects/cta/repository/entry/ASWG/Simulations/MCModelDescription/trunk/datFiles/mirror_CTA-100_1.20-86-0.04.dat
@@ -269,6 +292,17 @@ class Instrument():
             'VERITAS++': 100
             }
         
+        # Aperture diameter [m] for the scintillation term (MAGIC-LST.yml). Other telescopes: 2 sqrt(A / pi).
+        self.aperture_diameter_m_per_telescope = {t: yml[t]['diameter'] for t in ('MAGIC', 'LST')}
+
+        # Fraction of the STAR photons not lost in the optical halo (MAGIC-LST.yml: MAGIC 0.70, LST 1.00).
+        # Star only: the NSB is diffuse, so the light scattered out of the pixel is replaced by the sky
+        # scattered in from its neighbours (same reasoning as psf_containment).
+        self.halo_transmission_per_telescope = {
+            'MAGIC': yml['MAGIC']['halo'], 'LST': yml['LST']['halo'],
+            'MST-N': 1.0, 'pSCT': 1.0, 'SST-1M': 1.0, 'VERITAS': 1.0, 'VERITAS++': 1.0
+            }
+
         # Photodetector excess-noise factor F (variance is inflated by F^2
         # relative to pure Poisson shot noise). Values from MAGIC-LST.yml, where
         # the entry is labelled "F^-1"; it is taken to be F itself (shot variance x F^2 = 1.32).
@@ -310,6 +344,11 @@ class Instrument():
         # B-band extinction [mag/airmass] to impose on the MODTRAN optical depth, or None to
         # keep MODTRAN as it is (k_B = 0.30 at La Palma). See set_extinction_k_B.
         self.extinction_k_B = None
+
+        if self.telescope_type in yml:
+            window = float(self.camera_transmission(np.array([SII_CENTRE_NM]))[0])
+            self.funnel_transmission_per_telescope[self.telescope_type] = \
+                yml[self.telescope_type]['plexi_winston'] / window
 
         self.transmission = self.total_telescope_transmission()
 
@@ -360,8 +399,10 @@ class Instrument():
         result[mask] = f(wavelength[mask])
         if self.telescope_type == 'VERITAS' or self.telescope_type == 'VERITAS++':
             result = result * 0.6
-        elif self.telescope_type == 'MAGIC':
-            result = result * 0.82
+        elif self.telescope_type in magic_lst_constants():
+            # Normalise the curve to the yml reflectivity at 400 nm
+            raw = float(f(REFLECTIVITY_REF_NM))
+            result = result * magic_lst_constants()[self.telescope_type]['reflectivity_400nm'] / raw
         return result
 
     def quantum_efficiency(self, wavelength=None):
@@ -379,8 +420,10 @@ class Instrument():
         result[mask] = f(wavelength[mask])
         if self.telescope_type == 'VERITAS' or self.telescope_type == 'VERITAS++':
             result = result * 0.85
-        elif self.telescope_type == 'MAGIC':
-            result = result * 0.86
+        elif self.telescope_type in magic_lst_constants():
+            # Normalise the curve to the yml QE at the centre of the SII filter
+            raw = float(f(SII_CENTRE_NM))
+            result = result * magic_lst_constants()[self.telescope_type]['alpha_QE'] / raw
         return result
 
     def camera_transmission(self, wavelength=None):
@@ -533,7 +576,8 @@ class Instrument():
     def star_photon_rate(self, temperature_K=None):
         """
         Photo-electrons per second from a star of Johnson B = 0 (Vega system), at self.airmass,
-        through the full response (atmosphere x telescope x optical filter, if any).
+        through the full response (atmosphere x telescope x optical filter, if any) and the halo
+        transmission (halo_transmission_per_telescope; star light only).
 
         The star spectrum is CALSPEC Vega scaled to B = 0 (Vega has B = 0.03). If temperature_K is
         given, the rate is multiplied by a colour term: the ratio response / Bessell B photons of a
@@ -545,6 +589,7 @@ class Instrument():
         phi = vega_photon_density(wl) * 10 ** (0.4 * VEGA_B_MAGNITUDE)
         rate = self.mirror_area_per_telescope[self.telescope_type] * 1e4 * \
             _trapz(resp * phi, wl) * 10    # 1e4: m2 -> cm2, 10: nm -> A
+        rate *= self.halo_transmission_per_telescope[self.telescope_type]   # star only, not the NSB
         if temperature_K is None:
             return rate
         s_b = filter_curve("bessell_B", wl) / wl  # photon-counting
@@ -692,7 +737,7 @@ class Instrument():
             Airmass X = sec(z) of the target. Default 1.0 (zenith).
         excess_noise_factor, pedestal_pe_per_ns, aperture_diameter_m : float, optional
             Override the per-telescope defaults (excess_noise_factor_per_telescope,
-            pedestal_pe_per_ns_per_telescope, and 2*sqrt(area/pi) respectively).
+            pedestal_pe_per_ns_per_telescope, and the yml diameter, or 2*sqrt(area/pi), respectively).
         scint_coeff : float
             Empirical scaling on the scintillation sigma (Young's coefficient
             is for a median site; Osborn et al. 2015 find ~1.5 at La Palma,
@@ -728,7 +773,8 @@ class Instrument():
             Fraction of the star light inside the pixel (see Instrument.psf_containment).
             It multiplies the star photons only: the NSB is diffuse, so the light the PSF
             spreads out of the pixel is replaced by the sky spread in from its neighbours.
-            (throughput_factor, which is collecting area, scales both.)
+            (throughput_factor, which is collecting area, scales both.) The halo transmission
+            (halo_transmission_per_telescope) is in the star rate itself, for the same reason.
 
         Returns
         -------
@@ -743,8 +789,8 @@ class Instrument():
         if pedestal_pe_per_ns is None:
             pedestal_pe_per_ns = self.pedestal_pe_per_ns_per_telescope[self.telescope_type]
         if aperture_diameter_m is None:
-            area = self.mirror_area_per_telescope[self.telescope_type]
-            aperture_diameter_m = 2.0 * np.sqrt(area / np.pi)
+            aperture_diameter_m = self.aperture_diameter_m_per_telescope.get(
+                self.telescope_type, 2.0 * np.sqrt(self.mirror_area_per_telescope[self.telescope_type] / np.pi))
 
         previous_airmass = self.airmass
         if extinction:

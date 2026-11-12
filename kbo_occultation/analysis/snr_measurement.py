@@ -42,7 +42,7 @@ from ..observations.photometry import LightCurve, good_time_lightcurve
 # AMC panels (throughput_from_faulty_panels). MAGIC: both telescopes use
 # magic_spysii's mirror-magic2-nopsf_experimental_clean.def (see
 # magic_spysii/reflector.py), 247 facets of 0.985 m side = 239.6 m^2,
-# consistent with instruments.mirror_area_per_telescope['MAGIC'] = 240.
+# consistent with the 236 m^2 of MAGIC-LST.yml used in instruments.mirror_area_per_telescope['MAGIC'].
 N_PANELS = {"m1": 247, "m2": 247, "lst1": 198}
 
 

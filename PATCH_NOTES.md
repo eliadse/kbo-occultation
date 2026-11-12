@@ -90,3 +90,20 @@ flat placeholder for now (see `examples/parameter_sweep_example.py`).
   `average_chunks(x, n)` right after it is the one that actually runs).
   Left both alone since they're outside what you asked about, but flagging
   in case they bite you later.
+
+## MAGIC / LST efficiencies aligned with MAGIC-LST.yml
+
+`Instrument` now reads MAGIC-LST.yml (`magic_lst_constants`). Old → new, MAGIC / LST:
+
+| Term | Old | New |
+|---|---|---|
+| Mirror reflectivity at 400 nm | 0.755 / 0.92 | 0.90 / 0.90 |
+| QE at 420 nm (SII centre) | 0.325 / 0.378 | 0.295 / 0.40 |
+| Plexiglass + cones (window × funnel) | 0.78 / 0.82 | 0.90 / 0.90 |
+| Others (`transmission_per_telescope`) | 0.893 / 0.961 | 0.80 / 0.80 |
+| Mirror area [m²] | 240 / 380.271 | 236 / 370 |
+| Scintillation aperture [m] | 17.5 / 22.0 | 17 / 23 |
+| Halo (star light only, new) | – | 0.70 / 1.00 |
+
+Effect: B = 0 star rate −23 % (MAGIC), −7.5 % (LST); NSB +10 % (MAGIC), −7.5 % (LST).
+`ORM_ARRAY` uses the surveyed positions of the yml (M2 origin, x = East, y = North).

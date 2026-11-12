@@ -79,10 +79,10 @@ def test_tolerance_isotropic_and_projected():
     expected = ORM_ARRAY.max_baseline_m() / 25_000.0 + 0.15
     assert np.isclose(tol, expected)
 
-    # A drift direction pointing straight up has no baseline projection:
+    # A drift direction pointing straight up only sees the few-metre height differences (< 1 ms):
     kin_up = ShadowKinematics(v_rel_mps=25_000.0, direction_enu=np.array([0.0, 0.0, 1.0]))
     tol_up = coincidence_tolerance_s(ORM_ARRAY, kin_up, 0.3, template_allowance=0.5)
-    assert np.isclose(tol_up, 0.15)
+    assert np.isclose(tol_up, 0.15, atol=1e-3)
 
 
 def test_accidental_rate_matches_analytic_two_fold():

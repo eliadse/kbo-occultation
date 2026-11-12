@@ -6,11 +6,8 @@ recorded in the git history (commits `8161b09`, `7d90d42`).
 
 ## Package
 
-1. **LST funnel transmission tuned for a circular pixel** (`simulation/instruments.py`,
-   `funnel_transmission_per_telescope['LST'] = 0.892`).
-   - The value was tuned to reproduce the reference LST NSB of 0.26516 ph/ns/pixel with a circular pixel.
-   - The pixel is now a hexagon (NSB × 1.103), so LST NSB is 0.2844 ph/ns, ~7 % above the value the tuning aimed at.
-   - Fix: decide between re-tuning it (~0.81 reproduces 0.2652) and replacing it by a physical funnel transmission.
+1. ~~LST funnel transmission tuned for a circular pixel.~~ Closed: MAGIC and LST now take window × funnel =
+   0.90 (plexiglass + cones of `MAGIC-LST.yml`); the LST NSB is 0.2630 ph/ns/pixel with the hexagonal pixel.
 
 2. **Electronic pedestal is unmeasured** (`pedestal_pe_per_ns_per_telescope`, 0 for every telescope).
    - It enters only the variance-estimator floor, through ((S + B + P) / S)².

@@ -565,7 +565,9 @@ Configuration is code-based (dataclasses in [kbo_occultation/config.py](kbo_occu
 (ch B, `lst1`). The per-telescope physics constants used by `Instrument` (mirror
 area, QE, reflectivity, PMT excess noise, …) are in
 [MAGIC-LST.yml](kbo_occultation/data/iact_reference_values/MAGIC-LST.yml) and
-`simulation/instruments.py`.
+`simulation/instruments.py`. `Instrument` reads the area, diameter, QE, reflectivity, plexiglass + cones,
+"others" and halo terms of MAGIC and LST from the yml (`magic_lst_constants`); `ORM_ARRAY` holds its
+surveyed telescope positions (M2 origin, x = East, y = North).
 
 ### Star photons and magnitude system
 
@@ -574,21 +576,22 @@ area, QE, reflectivity, PMT excess noise, …) are in
     N = t · A · 10 · ∫ R(λ) Φ★(λ) dλ · 10^(−0.4 B)      (λ in nm, ×10 for nm→Å, A in cm²)
     Φ★ = Φ_Vega(λ) · 10^(0.4·0.03)
 
-with R the full response (atmosphere × mirror × QE × funnel × camera × optical filter, if any) and Φ_Vega the
+with R the full response (atmosphere × mirror × QE × funnel × camera × optical filter, if any), times the halo
+transmission (MAGIC 0.70, LST 1.00; star light only, the diffuse NSB is not scaled), and Φ_Vega the
 CALSPEC spectrum `alpha_lyr_stis_011.fits` in photons. Magnitudes are **Johnson B, Vega system** (Vega has B = 0.03),
 whatever the optical filter; the no-filter and SII responses both lie inside Johnson B. The AB system (flat f_ν) is not
 used: B_AB − B_Vega ≈ −0.15 mag and the reference shape differs (AB/Vega photons = 1.13 with no filter, 0.84 with SII).
 Pass `temperature_K` (to `num_photons_from_mag`, `noise_budget`, ...) for a blackbody star normalised to the same
 Bessell B photon count instead of Vega colours.
 
-B = 0 star at airmass 1 (La Palma), effective Φ0 in ph cm⁻² s⁻¹ Å⁻¹:
+B = 0 star at airmass 1 (La Palma), effective Φ0 in ph cm⁻² s⁻¹ Å⁻¹ (halo factor excluded):
 
 | Telescope | Filter | photo-electrons / s | Φ0 |
 |-----------|--------|--------------------:|---:|
-| MAGIC | none | 6.83·10¹¹ | 1144 |
-| MAGIC | `MAGIC_SII` | 1.16·10¹¹ | 1552 |
-| LST | none | 1.73·10¹² | 1144 |
-| LST | `MAGIC_SII` | 2.95·10¹¹ | 1552 |
+| MAGIC | none | 5.28·10¹¹ | 1144 |
+| MAGIC | `MAGIC_SII` | 8.99·10¹⁰ | 1552 |
+| LST | none | 1.60·10¹² | 1144 |
+| LST | `MAGIC_SII` | 2.73·10¹¹ | 1552 |
 
 Bundled data (`kbo_occultation/data/`): `optical_filters/` (MAGIC QE / SII / narrow,
 Gaia, SDSS *ugriz*, Johnson `bessell_B`), `Vega_spectrum.txt` and `alpha_lyr_*.fits`
@@ -620,12 +623,11 @@ pytest            # runs tests/unit (see pyproject.toml)
 
 See [PATCH_NOTES.md](PATCH_NOTES.md) for the history of fixes.
 
-- **Telescope positions** in `ORM_ARRAY` are approximate placeholders; replace them
-  with surveyed ENU coordinates when available (`TODO(user)` in `config.py`).
-- **MAGIC optics** in `Instrument` reuse the LST QE / reflectivity curves scaled to
-  the MAGIC mirror area, so MAGIC and LST differ only in collection area.
+- **MAGIC optics** in `Instrument` reuse the LST QE / reflectivity curves, rescaled to the
+  MAGIC-LST.yml values (reflectivity at 400 nm, QE at the SII centre), so MAGIC and LST have the
+  same lightcurve shape and differ in area, QE, reflectivity scale and the halo factor.
 - **Per-frame noise floor**: `noise_budget` includes the variance-estimator floor
-  √(2k/N) (k = 2, N = 2¹⁸ → 0.39 % per frame, MAGIC only, averaging down with the
+  √(2k/N) (k = 2, N = 2¹⁸ → 0.39 % per frame, MAGIC and LST, averaging down with the
   number of frames per bin) and an optional red-noise term `red_noise_rms` (default 0,
   not reduced by binning or by combining telescopes). `scint_coeff` defaults to 1.5.
 - **Legacy functions** `compute_lightcurve_old` and `apply_stellar_disk` in

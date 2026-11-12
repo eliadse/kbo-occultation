@@ -13,7 +13,8 @@ def phi0(tel, filt):
     inst = Instrument(tel, filter_type=filt, site="LaPalma")
     wl = inst.default_wavelengths.astype(float)
     area = inst.mirror_area_per_telescope[tel]
-    return inst.star_photon_rate() / (area * 1e4 * 10 * _trapz(inst.response(wl), wl))
+    halo = inst.halo_transmission_per_telescope[tel]
+    return inst.star_photon_rate() / (halo * area * 1e4 * 10 * _trapz(inst.response(wl), wl))
 
 
 @pytest.mark.parametrize("tel", ["MAGIC", "LST"])
@@ -94,7 +95,7 @@ def test_magic_qe_is_no_filter():
     assert inst.number_nsb_photons() == ref.number_nsb_photons()
 
 
-@pytest.mark.parametrize("tel, nsb", [("MAGIC", 0.0977 * 1.103), ("LST", 0.258 * 1.103)])   # hexagonal pixel
+@pytest.mark.parametrize("tel, nsb", [("MAGIC", 0.1189), ("LST", 0.2630)])   # hexagonal pixel, MAGIC-LST.yml efficiencies
 def test_nsb_rate_dark_no_filter(tel, nsb):
     assert Instrument(tel, site="LaPalma").number_nsb_photons() == pytest.approx(nsb, rel=0.02)
 
@@ -162,3 +163,47 @@ def test_extinction_k_B_is_imposed():
     assert -2.5 * np.log10(t440) == pytest.approx(0.23, rel=1e-3)
     tel.set_extinction_k_B(None)
     assert -2.5 * np.log10(float(tel.atmospheric_transmission(np.array([440.0]))[0])) == pytest.approx(0.30, abs=0.02)
+
+
+# ---- MAGIC-LST.yml efficiencies and halo --------------------------------------------------------
+
+from kbo_occultation.simulation.instruments import (magic_lst_constants, SII_CENTRE_NM,  # noqa: E402
+                                                    REFLECTIVITY_REF_NM)
+
+
+@pytest.mark.parametrize("tel", ["MAGIC", "LST"])
+def test_efficiencies_match_yml(tel):
+    c = magic_lst_constants()[tel]
+    inst = Instrument(tel, site="LaPalma")
+    assert inst.mirror_reflectivity(np.array([REFLECTIVITY_REF_NM]))[0] == pytest.approx(c["reflectivity_400nm"], rel=1e-3)
+    assert inst.quantum_efficiency(np.array([SII_CENTRE_NM]))[0] == pytest.approx(c["alpha_QE"], rel=1e-3)
+    window = inst.camera_transmission(np.array([SII_CENTRE_NM]))[0]
+    assert window * inst.funnel_transmission_per_telescope[tel] == pytest.approx(c["plexi_winston"], rel=1e-3)
+    assert inst.transmission_per_telescope[tel] == c["others"]
+    assert inst.mirror_area_per_telescope[tel] == c["area"]
+    assert inst.halo_transmission_per_telescope[tel] == c["halo"]
+
+
+def test_yml_values():
+    c = magic_lst_constants()
+    assert (c["MAGIC"]["area"], c["LST"]["area"]) == (236, 370)
+    assert (c["MAGIC"]["diameter"], c["LST"]["diameter"]) == (17, 23)
+    assert (c["MAGIC"]["halo"], c["LST"]["halo"]) == (0.7, 1.0)
+
+
+def test_halo_scales_star_not_nsb():
+    magic = Instrument("MAGIC", site="LaPalma")
+    no_halo = Instrument("MAGIC", site="LaPalma")
+    no_halo.halo_transmission_per_telescope["MAGIC"] = 1.0
+    assert magic.star_photon_rate() == pytest.approx(0.7 * no_halo.star_photon_rate(), rel=1e-12)
+    assert magic.number_nsb_photons() == no_halo.number_nsb_photons()
+    lst = Instrument("LST", site="LaPalma")
+    assert lst.halo_transmission_per_telescope["LST"] == 1.0
+
+
+def test_noise_budget_uses_yml_aperture():
+    for tel, d in (("MAGIC", 17.0), ("LST", 23.0)):
+        inst = Instrument(tel, site="LaPalma")
+        default = inst.noise_budget(8.0, 10 * u.ms)["sigma_scint"]
+        explicit = inst.noise_budget(8.0, 10 * u.ms, aperture_diameter_m=d)["sigma_scint"]
+        assert default == explicit

@@ -58,6 +58,14 @@ observatory:
     # - Others: 80%
 
     g: [0.304, 0.304, 0.6]
+    # Breakdown of g, read by simulation/instruments.py (order M2, M1, LST1). The MAGIC terms
+    # multiply to 0.295 (with the PSF-in-pixel term), not the 0.304 quoted in g.
+    reflectivity_400nm: [0.90, 0.90, 0.90]
+    halo: [0.70, 0.70, 1.0]            # photons not lost in halo (star light only)
+    psf_in_pixel: [0.70, 0.70, 1.0]    # not used: the logged PSF gives it per night
+    filter_transmission: [0.93, 0.93, 0.93]   # not used: the measured filter curve is used
+    plexi_winston: [0.90, 0.90, 0.90]
+    others: [0.80, 0.80, 0.80]
     # Total bandwidth (Hz) of the system (including PMT, optical transmission, digitizer...)
     b_v: [110e6, 110e6, 110e6]
     # Normalized spectral distribution of the light after the filter (how "squared" it is).
