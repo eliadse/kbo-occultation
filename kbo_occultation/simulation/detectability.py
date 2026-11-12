@@ -216,7 +216,8 @@ def matched_filter_snr(intensity: np.ndarray, sigma: float, template: Optional[n
 
         SNR = sqrt( sum_i (1 - template_i)^2 ) / sigma
 
-    assuming uniform, uncorrelated per-sample noise sigma. 
+    assuming uniform, uncorrelated per-sample noise sigma (white noise). For coloured
+    noise and a noise correction use analysis.min_size.expected_snr.
 
     If `template` is omitted, `intensity` is used as its own template (appropriate
     when testing against the noiseless simulated curve itself, e.g. to map out 
@@ -276,12 +277,13 @@ def sigma_from_instrument(instrument, magnitude: float, time_binning, ntels: int
     is_detectable.
 
     By default (``realistic=True``) this uses instruments.Instrument.noise_budget,
-    whose sigma_total combines three terms in quadrature:
+    whose sigma_total combines in quadrature:
         - star + NSB shot noise inflated by the photodetector excess-noise factor,
-        - electronic/readout noise,
-        - atmospheric scintillation (Young's formula, magnitude-independent).
-    This is what explains the floor seen in real bright-star light curves, where
-    the pure shot-noise model is wildly optimistic.
+        - atmospheric scintillation (short-exposure limit, magnitude-independent),
+        - the variance-estimator floor of the fast signal,
+        - an optional red-noise term (``red_noise_rms``).
+    This is white noise: the correlated 0.1-1 Hz noise of real runs is not in it
+    (see analysis.min_size, which uses the measured spectrum).
 
     Set ``realistic=False`` to recover the old shot-noise-only estimate,
     sigma = 1 / SNR_photometric with

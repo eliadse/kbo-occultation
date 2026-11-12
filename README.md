@@ -77,6 +77,7 @@ notebooks/
 | `analysis.bands` | `signal_band`: frequency band of the diffraction signal (f05 … f99, matched-filter band, chord time) |
 | `analysis.spectra`, `analysis.surrogates` | gap-aware Welch PSD, in-band noise, noise seen by a matched filter; Gaussian phase-randomised surrogates |
 | `analysis.mimic` | candidate catalogue, surrogates, false-alarm rates (what `kbo-night mimic` runs) |
+| `analysis.min_size` | smallest detectable KBO radius without injections: expected matched-filter SNR in the measured noise spectrum, thresholds from the real false-alarm rate, 2-of-3 detection probability, R50 vs magnitude / LST focus / catalogue stars |
 | `analysis.noise_removal` | efficiency at fixed real-data FAR of each noise-removal method (Butterworth scan, PSD whitening, DC detrend / swap / despike veto) |
 | `analysis.injection`, `analysis.injection_batch` | signal injection / recovery Monte Carlo |
 | `analysis.upper_limits`, `analysis.rates` | detection efficiency → KBO surface-density limits, event rates |
