@@ -191,3 +191,145 @@ def test_excess_noise_raises_r50(tiny_cfg):
         table = ms.min_size_table([star], [prof], cfg, curves, noise_models=("measured",))
         r[name] = table[(table.config == "MAGIC-2") & (table.far_per_hr == 1.0)]["r50_m"].iloc[0]
     assert r["noisy"] > r["clean"]
+
+
+# ───────────────────────────── calibration against injections ───────────────
+
+import pandas as pd
+
+
+def _thresholds(single=6.0, coinc=4.0):
+    rows = []
+    for far in (1.0,):
+        rows += [{"far_per_hr": far, "config": ch, "k": 1, "threshold": single} for ch in "ABC"]
+        rows += [{"far_per_hr": far, "config": "2of3", "k": 2, "threshold": coinc},
+                 {"far_per_hr": far, "config": "3of3", "k": 3, "threshold": coinc}]
+    return pd.DataFrame(rows)
+
+
+def _hand_made(snr_by_channel, t_by_channel, t0=100.0):
+    """One run, one radius, one trial with the given candidate SNRs / times per channel."""
+    key = {"night": "n", "observation": "o", "correction": "raw", "sf_mode": "measured"}
+    trials = pd.DataFrame([{**key, "radius_m": 100.0, "trial": 0, "channel": ch, "t0_s": t0, "peak_snr": 9.0}
+                           for ch in "ABC"])
+    cands = pd.DataFrame([{**key, "radius_m": 100.0, "trial": 0, "channel": ch, "t0_s": t0, "time_s": t_by_channel[ch],
+                           "dt_s": t_by_channel[ch] - t0, "snr": snr, "chi2_reduced": 1.0, "template_radius_m": 100.0}
+                          for ch, snr in snr_by_channel.items()])
+    return trials, cands
+
+
+def _eff(eff, config):
+    return float(eff[(eff["config"] == config)]["eff"].iloc[0])
+
+
+def test_measured_efficiency_k_of_n_and_thresholds():
+    # A and B above the coincidence threshold (4) and close in time, C absent
+    trials, cands = _hand_made({"A": 5.0, "B": 4.5}, {"A": 100.0, "B": 100.1})
+    eff = ms.measured_efficiency(trials, cands, _thresholds(), tolerance_s=0.4)
+    assert _eff(eff, "2of3") == 1.0 and _eff(eff, "3of3") == 0.0
+    assert _eff(eff, "A") == 0.0 and _eff(eff, "B") == 0.0          # below the single threshold (6)
+    # below the coincidence threshold: ignored
+    trials, cands = _hand_made({"A": 5.0, "B": 3.9}, {"A": 100.0, "B": 100.1})
+    assert _eff(ms.measured_efficiency(trials, cands, _thresholds(), 0.4), "2of3") == 0.0
+    # too far apart in time: no coincidence event
+    trials, cands = _hand_made({"A": 5.0, "B": 5.0}, {"A": 100.0, "B": 100.6})
+    assert _eff(ms.measured_efficiency(trials, cands, _thresholds(), 0.4), "2of3") == 0.0
+    # single channel above its threshold
+    trials, cands = _hand_made({"A": 7.0}, {"A": 100.0})
+    eff = ms.measured_efficiency(trials, cands, _thresholds(), 0.4)
+    assert _eff(eff, "A") == 1.0 and _eff(eff, "B") == 0.0 and _eff(eff, "2of3") == 0.0
+
+
+def test_excess_scaling_slopes():
+    rng = np.random.default_rng(0)
+    f = _grid()
+    for slope, expect in ((0.0, "star"), (-2.0, "total")):
+        profiles = []
+        for tel, ch in (("MAGIC-1", "C"), ("MAGIC-2", "A"), ("LST-1", "B")):
+            for sf in rng.uniform(0.3, 0.95, 8):
+                p = _profile(tel, ch)
+                p.star_fraction = float(sf)
+                p.S_excess = 1e-4 * sf ** slope / np.maximum(f, 0.5) ** 2 * (1.0 + 0.02 * rng.standard_normal(len(f)))
+                profiles.append(p)
+        out = ms.excess_scaling_test(profiles).set_index("group")
+        assert out.loc["pooled", "slope"] == pytest.approx(slope, abs=0.1), expect
+        assert out.loc["LST", "n"] == 8
+
+
+def test_fit_snr_calibration_recovers_scale():
+    rng = np.random.default_rng(1)
+    key = {"night": "n", "observation": "o", "correction": "raw", "sf_mode": "measured"}
+    radii = [50.0, 100.0, 200.0]
+    pred = pd.DataFrame([{"night": "n", "observation": "o", "correction": "raw", "channel": "A",
+                          "telescope": "MAGIC-2", "radius_m": r, "snr_pred": s} for r, s in zip(radii, (4.0, 8.0, 16.0))])
+    trials = pd.DataFrame([{**key, "channel": "A", "radius_m": r, "trial": i, "peak_snr": 1.5 * s + rng.standard_normal()}
+                           for r, s in zip(radii, (4.0, 8.0, 16.0)) for i in range(40)])
+    per_run, summary = ms.fit_snr_calibration(trials, pred)
+    assert per_run["scale"].iloc[0] == pytest.approx(1.5, rel=0.05)
+    assert per_run["scatter"].iloc[0] == pytest.approx(1.0, rel=0.4)
+    assert summary[(summary["kind"] == "all")]["scale"].iloc[0] == pytest.approx(1.5, rel=0.05)
+
+
+def test_predicted_efficiency_scale_shifts_the_curve():
+    pred = pd.DataFrame([{"night": "n", "observation": "o", "correction": "raw", "channel": ch, "telescope": "x",
+                          "radius_m": r, "snr_pred": s} for ch in "ABC" for r, s in zip((50.0, 100.0), (4.0, 8.0))])
+    e1 = ms.predicted_efficiency(pred, _thresholds())
+    e2 = ms.predicted_efficiency(pred, _thresholds(), {"raw": (1.5, 1.0)})
+    a = e1[e1.config == "2of3"].sort_values("radius_m")["eff_pred"].to_numpy()
+    b = e2[e2.config == "2of3"].sort_values("radius_m")["eff_pred"].to_numpy()
+    assert np.all(b >= a) and b[0] > a[0] + 0.1
+
+
+def test_scale_by_deviance_finds_true_scale():
+    pred = pd.DataFrame([{"night": "n", "observation": "o", "correction": "raw", "channel": ch, "telescope": "x",
+                          "radius_m": r, "snr_pred": 1.2 * r / 10.0} for ch in "ABC" for r in (20.0, 25.0, 30.0, 35.0, 40.0)])
+    thr = _thresholds(single=6.0, coinc=6.0)
+    truth = ms.predicted_efficiency(pred, thr, {"raw": (1.3, 1.0)})
+    meas = truth[truth["config"] == "2of3"].copy()
+    meas["n"] = 400
+    meas["hits"] = (meas["eff_pred"] * 400).round().astype(int)
+    meas["sf_mode"] = "measured"
+    meas = meas.drop(columns="eff_pred")
+    best, curve = ms.scale_by_deviance(meas, pred, thr, "raw")
+    assert best == pytest.approx(1.3, rel=0.08)
+
+
+def test_timeslide_far_matches_independent_streams(tmp_path):      # sparse lists: window occupancy ~ 5 %
+    from types import SimpleNamespace
+    rng = np.random.default_rng(5)
+    t0 = 1.7e9
+    live = 300.0
+    rows = []
+    for ch in "ABC":
+        for t, s in zip(t0 + 10 + rng.uniform(0, live - 20, 40), 3.0 + rng.exponential(0.8, 40)):
+            rows.append({"night": "n", "observation": "o", "channel": ch, "method": "raw", "time_s": t, "snr": s,
+                         "chi2_reduced": 1.0, "radius_m": 100.0, "depth": 0.01})
+    csv = str(tmp_path / "c.csv")
+    pd.DataFrame(rows).to_csv(csv, index=False)
+    tel = lambda ch: SimpleNamespace(name=ch)                                                  # noqa: E731
+    obs = SimpleNamespace(name="o", has_cache=True, good_time=[0.0, live], time_span=lambda: (t0, t0 + live))
+    night = SimpleNamespace(name="n", channels=["A", "B", "C"], stars={"o": obs}, telescope=tel)
+    log = SimpleNamespace(select=lambda nights=None, include_excluded=False: [night])
+    curves = {ch: ms.RateCurve(np.array([r["snr"] for r in rows if r["channel"] == ch]), live / 3600.0)
+              for ch in "ABC"}
+    tol = 0.2
+    far = ms.timeslide_far(csv, log, "raw", tolerance_s=tol, snr_grid=[3.0, 3.5], n_shifts=400, curves=curves)
+    for _, r in far.iterrows():
+        assert r["slide_rate_per_hr"] == pytest.approx(r["analytic_rate_per_hr"], rel=0.25)
+    assert far["slide_hours"].iloc[0] == pytest.approx(400 * live / 3600.0)
+
+
+def test_calibrated_config_and_theory_noise_is_not_scaled(tiny_cfg):
+    from dataclasses import replace
+    c = replace(tiny_cfg, correction="whitened").calibrated()
+    assert (c.snr_scale, c.snr_scatter) == ms.SNR_CALIBRATION["whitened"]
+    unknown = replace(tiny_cfg, correction="nonexistent", snr_scale=1.3).calibrated()
+    assert unknown.snr_scale == 1.3
+    star, profile = ms.TargetStar("t", 9.0, 0.03), _profile("MAGIC-2", "A")
+    templates = ms.template_family(star, tiny_cfg, __import__("kbo_occultation.simulation.instruments",
+                                                                 fromlist=["Instrument"]).Instrument("MAGIC", site="LaPalma"))
+    base = ms.per_telescope_snr(star, profile, templates, tiny_cfg, theory_only=True)
+    scaled = ms.per_telescope_snr(star, profile, templates, replace(tiny_cfg, snr_scale=2.0), theory_only=True)
+    np.testing.assert_allclose(base, scaled)
+    assert np.allclose(2.0 * ms.per_telescope_snr(star, profile, templates, tiny_cfg),
+                       ms.per_telescope_snr(star, profile, templates, replace(tiny_cfg, snr_scale=2.0)))

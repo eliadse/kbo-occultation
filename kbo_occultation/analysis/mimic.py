@@ -121,22 +121,35 @@ def _template_duration(templates) -> float:
 
 
 def search_lightcurve(lc: LightCurve, templates, snr_threshold: float,
-                      template_duration_s: float, sigma_window_s: Optional[float] = None):
+                      template_duration_s: float, sigma_window_s: Optional[float] = None,
+                      peak_near: Optional[Tuple[float, float]] = None):
     """
     Blind search of one (binned, corrected) light curve with every template.
     Returns (rows, z, calib): candidate dicts (best template per time), the
     normalised residual used for the tail statistics, and the calibration of
     the SNR trace itself (std and MAD-sigma, averaged over templates; both
     should be ~1 on noise the normalisation describes correctly).
+
+    ``peak_near=(t0, half_width_s)`` adds ``peak_snr``, ``peak_time`` and ``peak_radius_m`` to
+    ``calib``: the largest SNR of any template within ``half_width_s`` of ``t0``, whether or not it
+    is above ``snr_threshold`` (``nan`` if the window holds no lag). Used by the injection studies.
     """
     baseline, sigma = compute_baseline_and_sigma(lc.time, lc.signal, template_duration_s)
     best: List[dict] = []
     stds, mads = [], []
+    peak = {"peak_snr": np.nan, "peak_time": np.nan, "peak_radius_m": np.nan}
     for radius, (tt, ti) in templates.items():
         mf = sliding_matched_filter_snr(lc.time, lc.signal, tt, ti, baseline=baseline, sigma=sigma,
                                         normalization="empirical", sigma_window_s=sigma_window_s)
         stds.append(float(np.std(mf.snr)))
         mads.append(float(1.4826 * np.median(np.abs(mf.snr - np.median(mf.snr)))))
+        if peak_near is not None:
+            near = np.flatnonzero(np.abs(mf.time - peak_near[0]) <= peak_near[1])
+            if near.size:
+                i = near[np.argmax(mf.snr[near])]
+                if not mf.snr[i] <= peak["peak_snr"]:          # also true while peak_snr is nan
+                    peak = {"peak_snr": float(mf.snr[i]), "peak_time": float(mf.time[i]),
+                            "peak_radius_m": float(radius)}
         peak_amp = float(np.max(np.abs(mf.residual_template)))
         for cand in find_candidates(mf, snr_threshold=snr_threshold, chi2_weighting="empirical"):
             lag = int(np.searchsorted(mf.time, cand.time_s))
@@ -149,8 +162,10 @@ def search_lightcurve(lc: LightCurve, templates, snr_threshold: float,
         if all(abs(row["time_s"] - k["time_s"]) >= template_duration_s for k in kept):
             kept.append(row)
     z = (lc.signal / baseline - 1.0) / np.where(sigma > 0, sigma, np.nan)
-    return sorted(kept, key=lambda r: r["time_s"]), z, {"snr_std": float(np.mean(stds)),
-                                                         "snr_mad_sigma": float(np.mean(mads))}
+    calib = {"snr_std": float(np.mean(stds)), "snr_mad_sigma": float(np.mean(mads))}
+    if peak_near is not None:
+        calib.update(peak)
+    return sorted(kept, key=lambda r: r["time_s"]), z, calib
 
 
 def _as_candidates(rows: Iterable[dict]) -> List[Candidate]:
