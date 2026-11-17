@@ -36,6 +36,7 @@ Caveats (to be calibrated by injections on the array, see min-size-plan.md):
 """
 
 import json
+import warnings
 import zlib
 from dataclasses import dataclass, field, replace
 from itertools import combinations
@@ -51,10 +52,10 @@ from ..config import (BandpassConfig, GridConfig, KBOConfig, NumericalConfig, OR
                       StarConfig)
 from ..simulation.engine import OccultationEngine
 from ..simulation.kinematics import ShadowKinematics, shadow_velocity_opposition
-from ..simulation.physics import AU_m, mas_to_rad, teff_from_spectral_type
+from ..simulation.physics import AU_m, mas_to_rad, star_radius_from_mag, teff_from_spectral_type
 from .bands import SIGNAL_BAND_HZ
 from .coincidence import coincidence_tolerance_s
-from .spectra import _trapz, lightcurve_psd, matched_filter_sigma
+from .spectra import _trapz, blockwise_welch, lightcurve_psd, matched_filter_sigma
 
 FRAME_S = config.standard_sampling * config.standard_sample_duration * 1e-9   # 524.288 us
 SNR_FLOOR = 3.0                      # candidates are listed above this (noise_removal, mimic)
@@ -72,11 +73,6 @@ class TargetStar:
     spectral_type: Optional[str] = None
 
 
-def star_radius_from_mag(mag_B: float, ref_mag: float = 7.0, ref_radius_mas: float = 0.03) -> float:
-    """Angular radius [mas] at fixed surface brightness: r = r_ref * 10^(-0.2 (B - B_ref))."""
-    return float(ref_radius_mas * 10.0 ** (-0.2 * (mag_B - ref_mag)))
-
-
 def generic_targets(mags: Optional[Sequence[float]] = None, ref_mag: float = 7.0,
                     ref_radius_mas: float = 0.03, temperature_K: float = 10000.0) -> List[TargetStar]:
     """B = 7 ... 9 (step 0.25) stars whose radius shrinks with magnitude (star_radius_from_mag)."""
@@ -87,6 +83,22 @@ def generic_targets(mags: Optional[Sequence[float]] = None, ref_mag: float = 7.0
 
 CATALOGUE_COLUMNS = {"name": "name", "mag_B": "mag_B", "angular_radius_mas": "angular_radius_mas",
                      "temperature_K": "temperature_K", "spectral_type": "spectral_type"}
+
+
+def parse_column_map(text: Optional[str]) -> Optional[Dict[str, str]]:
+    """``"name=Name,mag_B=Bmag"`` -> {"name": "Name", "mag_B": "Bmag"} for ``load_target_catalogue`` (None if empty)."""
+    if not text:
+        return None
+    out = {}
+    for item in text.split(","):
+        key, sep, value = item.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or not value:
+            raise ValueError(f"bad column mapping {item!r}: expected field=column")
+        if key not in CATALOGUE_COLUMNS:
+            raise ValueError(f"unknown catalogue field {key!r} (one of {', '.join(CATALOGUE_COLUMNS)})")
+        out[key] = value
+    return out
 
 
 def load_target_catalogue(path: str, column_map: Optional[Mapping[str, str]] = None,
@@ -129,7 +141,7 @@ class MinSizeConfig:
     distance_au: float = 39.0            # geocentric (Earth->KBO) at opposition
     heliocentric_au: float = 40.0        # sets the shadow velocity
     bin_samples: int = 10                # 5.24 ms, as in the search (mimic.MimicConfig)
-    radii_m: np.ndarray = field(default_factory=lambda: np.geomspace(20.0, 1000.0, 30))
+    radii_m: np.ndarray = field(default_factory=lambda: np.geomspace(10.0, 1000.0, 41))
     correction: str = "whitened"         # raw | whitened | optimal | butter_<fc>
     coinc_far_per_hr: float = 1.0        # headline coincidence false-alarm rate
     extra_fars: Tuple[float, ...] = (0.1, 0.01)
@@ -144,14 +156,25 @@ class MinSizeConfig:
     dx_m: float = 5.0
     n_star_side: int = 64
     n_r_grid: int = 4000
+    time_resolved: bool = True           # noise level per block of one search sigma-window (profiles need blocks)
+    block_nperseg: int = 1024            # Welch segment of the block PSDs [binned samples]
 
     @property
     def bin_dt_s(self) -> float:
         return self.bin_samples * FRAME_S
 
+    @property
+    def block_s(self) -> float:
+        """Length of the blocks of the time-resolved noise: the search's sigma window, 20 template durations."""
+        return 20.0 * 2.0 * self.x_half_m / self.velocity_mps()
+
     def calibrated(self) -> "MinSizeConfig":
-        """Copy with ``snr_scale`` / ``snr_scatter`` of this correction from ``SNR_CALIBRATION`` (unchanged if absent)."""
-        scale, scatter = SNR_CALIBRATION.get(self.correction, (self.snr_scale, self.snr_scatter))
+        """
+        Copy with ``snr_scale`` / ``snr_scatter`` of this correction from ``SNR_CALIBRATION`` (time-resolved noise) or
+        ``SNR_CALIBRATION_STATIONARY`` (unchanged if absent).
+        """
+        table = SNR_CALIBRATION if self.time_resolved else SNR_CALIBRATION_STATIONARY
+        scale, scatter = table.get(self.correction, (self.snr_scale, self.snr_scatter))
         return replace(self, snr_scale=scale, snr_scatter=scatter)
 
     def velocity_mps(self) -> float:
@@ -171,9 +194,12 @@ def _engine(star: TargetStar, cfg: MinSizeConfig, instrument) -> OccultationEngi
     grid = GridConfig(half, int(round(2.0 * half / cfg.dx_m)))
     r_star = star.angular_radius_mas * mas_to_rad * cfg.distance_au * AU_m
     r_max = 1.2 * np.hypot(half + r_star, r_star + abs(cfg.impact_parameter_m))
+    r_max_0 = 1.2 * np.hypot(half + r_star, r_star)
     band = BandpassConfig(*instrument.response_band())
+    # the radial grid widens with the impact parameter; its step stays the b = 0 one
+    n_r_grid = int(round(cfg.n_r_grid * r_max / r_max_0))
     return OccultationEngine(StarConfig(star.temperature_K, star.angular_radius_mas), band, grid,
-                             NumericalConfig(n_r_grid=cfg.n_r_grid, n_star_side=cfg.n_star_side),
+                             NumericalConfig(n_r_grid=n_r_grid, n_star_side=cfg.n_star_side),
                              response=instrument.response, r_max_m=r_max)
 
 
@@ -188,20 +214,46 @@ def injection_patterns(star: TargetStar, cfg: MinSizeConfig, instrument,
     return out
 
 
+def _fine_time(cfg: MinSizeConfig) -> np.ndarray:
+    """Frame-cadence time axis of the shared template span, a whole number of bins long."""
+    v = cfg.velocity_mps()
+    t_fine = np.arange(-cfg.x_half_m / v, cfg.x_half_m / v, FRAME_S)
+    return t_fine[:len(t_fine) // cfg.bin_samples * cfg.bin_samples]
+
+
+def _binned_residual(t_axis_s: np.ndarray, intensity: np.ndarray, t_fine: np.ndarray, cfg: MinSizeConfig) -> np.ndarray:
+    """I - 1 of a pattern (time axis ``t_axis_s``) at the bin cadence on the span of ``t_fine``."""
+    fine = np.interp(t_fine, t_axis_s, intensity)
+    return fine.reshape(-1, cfg.bin_samples).mean(axis=1) - 1.0
+
+
 def template_family(star: TargetStar, cfg: MinSizeConfig, instrument) -> Dict[float, np.ndarray]:
     """
     {radius_m: I - 1} at the bin cadence, for ``star`` seen through ``instrument.response()``
     (one engine, the Fresnel profiles are shared by the radii that repeat across calls).
     """
     v = cfg.velocity_mps()
-    half = cfg.x_half_m
-    t_fine = np.arange(-half / v, half / v, FRAME_S)
-    t_fine = t_fine[:len(t_fine) // cfg.bin_samples * cfg.bin_samples]
-    out = {}
-    for radius, (x_m, intensity) in injection_patterns(star, cfg, instrument).items():
-        fine = np.interp(t_fine, x_m / v, intensity)
-        out[radius] = fine.reshape(-1, cfg.bin_samples).mean(axis=1) - 1.0
-    return out
+    t_fine = _fine_time(cfg)
+    return {radius: _binned_residual(x_m / v, intensity, t_fine, cfg)
+            for radius, (x_m, intensity) in injection_patterns(star, cfg, instrument).items()}
+
+
+def bank_residuals(cfg: MinSizeConfig, mimic_cfg=None, star: Optional[TargetStar] = None) -> Dict[float, np.ndarray]:
+    """
+    {radius_m: I - 1} of the templates of the real search (``mimic.search_templates``: the star through the
+    320-450 nm band, at the shadow velocity of the search) at the bin cadence of ``template_family``. The star is the
+    fixed 0.03 mas one of ``mimic_cfg`` unless ``star`` is given: the bank of that star (size and temperature), as
+    ``mimic.star_bank`` builds it for an observed one.
+    """
+    from ..simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU
+    from .mimic import MimicConfig, search_templates
+
+    mimic_cfg = mimic_cfg or MimicConfig()
+    v_bank = shadow_velocity_opposition(mimic_cfg.distance_au + EARTH_SEMIMAJOR_AXIS_AU)
+    t_fine = _fine_time(cfg)
+    templates = (search_templates(mimic_cfg, v_bank) if star is None else
+                 search_templates(mimic_cfg, v_bank, star.angular_radius_mas, star.temperature_K))
+    return {radius: _binned_residual(t, intensity, t_fine, cfg) for radius, (t, intensity) in templates.items()}
 
 
 # ───────────────────────────── noise profiles ───────────────────────────────
@@ -231,6 +283,13 @@ class NoiseProfile:
     k_B: Optional[float]
     clipped_fraction: float        # of the signal band where the measured PSD is below the model's white level
     live_s: float
+    block_freq: Optional[np.ndarray] = None        # Hz, grid of the block PSDs
+    S_excess_blocks: Optional[np.ndarray] = None   # (n_block, len(block_freq)) as S_excess; NaN = block not usable
+    white_sigma: Optional[float] = None            # star-unit sigma per bin replacing the noise model's (synthetic runs)
+
+    @property
+    def n_block(self) -> int:
+        return 0 if self.S_excess_blocks is None else int(self.S_excess_blocks.shape[0])
 
     @property
     def fs(self) -> float:
@@ -238,7 +297,7 @@ class NoiseProfile:
 
     _META = ("night", "observation", "channel", "telescope", "mag_B", "teff_K", "dt", "star_fraction",
              "star_fraction_model", "sf_source", "airmass", "psf_containment", "throughput", "k_B",
-             "clipped_fraction", "live_s")
+             "clipped_fraction", "live_s", "white_sigma")
 
 
 def model_budget(profile: NoiseProfile, mag_B: float, temperature_K: Optional[float],
@@ -263,18 +322,21 @@ def _star_fraction(budget: dict) -> float:
 
 
 def measure_noise_profiles(log, nights=None, cfg: Optional[MinSizeConfig] = None, *,
-                           include_excluded: bool = False, lcs=None, nperseg: int = 4096,
+                           include_excluded: bool = False, lcs=None, nperseg: int = 4096, blocks: bool = True,
                            progress: Optional[Callable[[str], None]] = None) -> List[NoiseProfile]:
     """
     One NoiseProfile per (star run, channel) of the selected nights: the run is cropped to its
     good-time window, binned (``cfg.bin_samples``), and its Welch PSD converted to star units.
     ``nperseg`` is the segment length in binned samples (4096 = 21 s, 0.05 Hz resolution).
+    With ``blocks`` the run is also cut into blocks of about ``cfg.block_s`` (the search's sigma window) and
+    each block gets its own median-Welch excess PSD (``S_excess_blocks``), for ``cfg.time_resolved``.
     The expensive step is loading the light curves (``lcs`` accepts the dict of
     ``snr.load_lightcurves``); use save_profiles to keep the result.
     """
     from ..observations.cc_reports import conditions_table
     from ..observations.photometry import good_time_lightcurve
     from .mimic import bin_lightcurve
+    from .spectra import fractional_flux
     from .snr import instrument_for, load_lightcurves, logged_psf_containment, nsb_table
     from .snr_measurement import throughput_from_faulty_panels
 
@@ -334,9 +396,43 @@ def measure_noise_profiles(log, nights=None, cfg: Optional[MinSizeConfig] = None
                 profile.S_excess = np.maximum(s_star - white, 0.0)
                 band = (freq >= lo) & (freq <= min(hi, freq[-1]))
                 profile.clipped_fraction = float(np.mean(s_star[band] < white)) if band.any() else np.nan
+                if blocks:
+                    span = float(lc.time[-1] - lc.time[0]) + profile.dt
+                    n_block = max(1, int(round(span / cfg.block_s)))
+                    if span / n_block >= cfg.block_nperseg * profile.dt:
+                        profile.block_freq, b_psd = blockwise_welch(lc.time, fractional_flux(lc.signal), profile.fs,
+                                                                    n_block, cfg.block_nperseg)
+                        profile.S_excess_blocks = np.maximum(b_psd / sf ** 2 - white, 0.0)
                 profiles.append(profile)
                 say(f"{night.name} {obs.name} {ch}: sf={sf:.3f} ({profile.sf_source}), "
                     f"clipped {profile.clipped_fraction:.2f}")
+    return profiles
+
+
+def load_or_measure_profiles(log, nights, cfg: Optional[MinSizeConfig] = None, path: Optional[str] = None, *,
+                             include_excluded: bool = False, blocks: bool = True, force: bool = False,
+                             progress: Optional[Callable[[str], None]] = None) -> List[NoiseProfile]:
+    """
+    The profiles of ``nights`` from ``path`` (default outputs/min_size/profiles_<nights>.npz) if it exists, else
+    measured (``measure_noise_profiles``, slow) and saved there. A file without block PSDs is measured again
+    when ``blocks`` is wanted; ``force`` measures again anyway.
+    """
+    import os
+
+    say = progress or (lambda m: None)
+    nights = list(nights) if nights else []
+    path = path or os.path.join("outputs", "min_size", "profiles_" + "_".join(nights) + ".npz")
+    if os.path.exists(path) and not force:
+        profiles = load_profiles(path)
+        if not blocks or all(p.n_block > 0 for p in profiles):
+            say(f"profiles: {len(profiles)} from {path}")
+            return profiles
+        say(f"{path} has no block PSDs; measuring again")
+    say("measuring noise profiles (slow: loads the light curves)")
+    profiles = measure_noise_profiles(log, nights or None, cfg, include_excluded=include_excluded, blocks=blocks,
+                                      progress=say)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    save_profiles(profiles, path)
     return profiles
 
 
@@ -345,13 +441,18 @@ def save_profiles(profiles: Sequence[NoiseProfile], path: str) -> None:
     arrays = {}
     for i, p in enumerate(profiles):
         arrays[f"freq_{i}"], arrays[f"exc_{i}"] = p.freq, p.S_excess
+        if p.S_excess_blocks is not None:
+            arrays[f"bfreq_{i}"], arrays[f"bexc_{i}"] = p.block_freq, p.S_excess_blocks
     np.savez_compressed(path, meta=json.dumps(meta), **arrays)
 
 
 def load_profiles(path: str) -> List[NoiseProfile]:
     with np.load(path, allow_pickle=False) as z:
         meta = json.loads(str(z["meta"]))
-        return [NoiseProfile(freq=z[f"freq_{i}"], S_excess=z[f"exc_{i}"], **m) for i, m in enumerate(meta)]
+        return [NoiseProfile(freq=z[f"freq_{i}"], S_excess=z[f"exc_{i}"],
+                             block_freq=z[f"bfreq_{i}"] if f"bfreq_{i}" in z.files else None,
+                             S_excess_blocks=z[f"bexc_{i}"] if f"bexc_{i}" in z.files else None, **m)
+                for i, m in enumerate(meta)]
 
 
 # ───────────────────────────── expected SNR ─────────────────────────────────
@@ -388,34 +489,57 @@ def correction_gain(name: str, freq: np.ndarray, psd: np.ndarray, fs: float) -> 
 
 
 def expected_snr(template_residual: np.ndarray, freq: np.ndarray, psd: np.ndarray, fs: float,
-                 gain: Optional[np.ndarray] = None) -> float:
+                 gain: Optional[np.ndarray] = None, signal: Optional[np.ndarray] = None) -> float:
     """
     Expected matched-filter SNR of the template (I - 1, sampled at 1 / fs) in the noise PSD ``psd``
     (one-sided, 1/Hz, on the rfft grid ``freq`` of n_fft = 2 (len(freq) - 1) points, as
     spectra.segmented_welch) after the correction ``gain`` (None = 1). For white noise of sigma s
     and no correction it is |T| / s.
+
+    ``signal`` (I - 1 of a different event, same sampling): the template does not match it, the
+    output is the largest correlation over lag, <G t, G s> / |G t|, over the same noise, so a
+    signal equal to the template gives the matched value and any other of the same norm less.
     """
     n_fft = 2 * (len(freq) - 1)
     t = np.asarray(template_residual, dtype=float)
     if len(t) > n_fft:
         raise ValueError(f"template ({len(t)} samples) longer than the PSD's FFT ({n_fft})")
     g = np.ones_like(freq) if gain is None else np.asarray(gain, float)
-    t_corr = np.fft.irfft(g * np.fft.rfft(t, n=n_fft), n=n_fft)
+    t_fft = g * np.fft.rfft(t, n=n_fft)
+    t_corr = np.fft.irfft(t_fft, n=n_fft)
     sigma = matched_filter_sigma(freq, g ** 2 * np.asarray(psd, float), t_corr, fs)
-    return float(np.linalg.norm(t_corr) / sigma)
+    norm = float(np.linalg.norm(t_corr))
+    if signal is None:
+        return norm / sigma
+    sig = np.asarray(signal, dtype=float)
+    if len(sig) > n_fft:
+        raise ValueError(f"signal ({len(sig)} samples) longer than the PSD's FFT ({n_fft})")
+    s_fft = g * np.fft.rfft(sig, n=n_fft)
+    xcorr = np.fft.irfft(np.conj(t_fft) * s_fft, n=n_fft)
+    return float(np.max(xcorr) / (norm * sigma))
+
+
+def bank_snr(signal: np.ndarray, bank: Mapping[float, np.ndarray], freq: np.ndarray, psd: np.ndarray, fs: float,
+             gain: Optional[np.ndarray] = None) -> float:
+    """Expected SNR of ``signal`` found with the best template of ``bank`` ({radius: I - 1}), as the search does."""
+    return max(expected_snr(t, freq, psd, fs, gain, signal=signal) for t in bank.values())
 
 
 def noise_psd(profile: NoiseProfile, star: TargetStar, cfg: MinSizeConfig, *, theory_only: bool = False,
-              focus_gain: float = 1.0) -> np.ndarray:
+              focus_gain: float = 1.0, block: Optional[int] = None) -> np.ndarray:
     """
     Noise PSD (star units, 1/Hz, on profile.freq) of ``star`` in the conditions of ``profile``: the
-    white level of the noise model plus the run's excess (not in ``theory_only``).
+    white level of the noise model plus the run's excess (not in ``theory_only``). ``block`` selects
+    the excess of that time block instead (on profile.block_freq). ``profile.white_sigma``, when set, replaces the
+    noise model's sigma per bin (synthetic runs at a given SNR).
     """
     budget = model_budget(profile, star.mag_B, star.temperature_K, focus_gain)
-    psd = np.full_like(profile.freq, 2.0 * float(budget["sigma_total"]) ** 2 / profile.fs)
+    freq = profile.freq if block is None else profile.block_freq
+    sigma = float(budget["sigma_total"]) if profile.white_sigma is None else float(profile.white_sigma)
+    psd = np.full_like(freq, 2.0 * sigma ** 2 / profile.fs)
     if theory_only:
         return psd
-    excess = profile.S_excess
+    excess = profile.S_excess if block is None else profile.S_excess_blocks[block]
     if cfg.excess_scaling == "total":
         excess = excess * (profile.star_fraction_model / _star_fraction(budget)) ** 2
     elif cfg.excess_scaling != "star":
@@ -423,21 +547,61 @@ def noise_psd(profile: NoiseProfile, star: TargetStar, cfg: MinSizeConfig, *, th
     return psd + excess
 
 
+def snr_evaluator(star: TargetStar, profile: NoiseProfile, cfg: MinSizeConfig, *, theory_only: bool = False,
+                  focus_gain: float = 1.0, time_resolved: Optional[bool] = None
+                  ) -> Callable[..., np.ndarray]:
+    """
+    ``f(template, signal=None)``: expected SNR of ``template`` (I - 1 at the bin cadence), or of ``signal``
+    searched with it (``expected_snr``), in the noise of ``star`` under the conditions of ``profile``; the noise
+    PSD and correction are built once. With measured noise it is multiplied by cfg.snr_scale. The result is a
+    float, or (n_block,) with time-resolved noise (``per_telescope_snr``).
+    """
+    if not np.isclose(profile.dt, cfg.bin_dt_s, rtol=1e-3):
+        raise ValueError(f"profile cadence {profile.dt} s differs from the template's {cfg.bin_dt_s} s")
+    want_blocks = (cfg.time_resolved if time_resolved is None else time_resolved) and not theory_only
+    use_blocks = want_blocks and profile.n_block > 0
+    if want_blocks and not use_blocks:
+        warnings.warn(f"{profile.night}/{profile.observation}/{profile.channel}: time-resolved noise requested but the "
+                      "profile has no block PSDs (measure_noise_profiles(blocks=True)); using one PSD for the run",
+                      stacklevel=2)
+    psd = noise_psd(profile, star, cfg, theory_only=theory_only, focus_gain=focus_gain)
+    gain = correction_gain("raw" if theory_only else cfg.correction, profile.freq, psd, profile.fs)
+    scale = 1.0 if theory_only else cfg.snr_scale
+    if not use_blocks:
+        return lambda template, signal=None: scale * expected_snr(template, profile.freq, psd, profile.fs, gain,
+                                                                  signal=signal)
+    gain_b = np.interp(profile.block_freq, profile.freq, gain)
+    psds_b = [None if not np.all(np.isfinite(profile.S_excess_blocks[k])) else
+              noise_psd(profile, star, cfg, focus_gain=focus_gain, block=k) for k in range(profile.n_block)]
+
+    def evaluate(template, signal=None):
+        return scale * np.array([np.nan if q is None else
+                                 expected_snr(template, profile.block_freq, q, profile.fs, gain_b, signal=signal)
+                                 for q in psds_b])
+    return evaluate
+
+
 def per_telescope_snr(star: TargetStar, profile: NoiseProfile, templates: Mapping[float, np.ndarray],
-                      cfg: MinSizeConfig, *, theory_only: bool = False, focus_gain: float = 1.0) -> np.ndarray:
+                      cfg: MinSizeConfig, *, theory_only: bool = False, focus_gain: float = 1.0,
+                      time_resolved: Optional[bool] = None,
+                      signals: Optional[Mapping[float, np.ndarray]] = None) -> np.ndarray:
     """
     Expected SNR at every radius of cfg.radii_m. With measured noise it is multiplied by
     cfg.snr_scale (see ``SNR_CALIBRATION``: the real search normalises with a robust scatter, which on
     intermittent red noise is below the rms that the PSD gives); ``theory_only`` (white noise, no
     correction) is not scaled, the scale was fitted on real data. Stationary Gaussian noise is assumed.
+
+    ``time_resolved`` (default ``cfg.time_resolved``; needs ``profile.S_excess_blocks``): the noise level of
+    each block of the run (the search normalises with a local scatter) gives one row per block, so the
+    result is (n_block, n_radii), NaN rows for unusable blocks. The correction G is still that of the whole run
+    (the whitening of the search is fitted on it).
+
+    ``signals`` {radius: I - 1}: the events that are searched (default the templates themselves, i.e. a perfect
+    match); see ``expected_snr``. Used for events at an impact parameter.
     """
-    if not np.isclose(profile.dt, cfg.bin_dt_s, rtol=1e-3):
-        raise ValueError(f"profile cadence {profile.dt} s differs from the template's {cfg.bin_dt_s} s")
-    psd = noise_psd(profile, star, cfg, theory_only=theory_only, focus_gain=focus_gain)
-    gain = correction_gain("raw" if theory_only else cfg.correction, profile.freq, psd, profile.fs)
-    scale = 1.0 if theory_only else cfg.snr_scale
-    return scale * np.array([expected_snr(templates[float(r)], profile.freq, psd, profile.fs, gain)
-                             for r in cfg.radii_m])
+    f = snr_evaluator(star, profile, cfg, theory_only=theory_only, focus_gain=focus_gain, time_resolved=time_resolved)
+    out = np.array([f(templates[float(r)], None if signals is None else signals[float(r)]) for r in cfg.radii_m])
+    return out if out.ndim == 1 else out.T
 
 
 # ───────────────────────────── thresholds from the real FAR ─────────────────
@@ -557,16 +721,42 @@ def coincidence_threshold(curves: Mapping[str, RateCurve], tolerance_s: float, f
 
 # ───────────────────────────── detection probability and R50 ────────────────
 
+def array_threshold(curves: Mapping[str, RateCurve], channels: Sequence[str], k: int, far_per_hr: float,
+                    tolerance_s: float) -> Tuple[float, bool]:
+    """Per-telescope SNR threshold at ``far_per_hr`` for ``k`` of the ``channels``: single_threshold if k = 1, else
+    coincidence_threshold. Returns (threshold, extrapolated)."""
+    sub = {ch: curves[ch] for ch in channels}
+    if k == 1:
+        return single_threshold(sub[channels[0]], far_per_hr)
+    return coincidence_threshold(sub, tolerance_s, far_per_hr, k)
+
+
 def detection_probability(snr_by_tel: Mapping[str, np.ndarray], threshold, min_ntel: int,
                           snr_scatter: float = 1.0) -> np.ndarray:
     """
     P(at least ``min_ntel`` telescopes above their threshold) per radius, each SNR Gaussian around its
     expected value. ``threshold``: a number, or {telescope: number}.
+
+    A telescope's SNR is (n_radii,) or, with time-resolved noise, (n_block, n_radii): the probability is
+    then computed per block (the same event time in every telescope) and averaged over the blocks that are
+    usable in all of them, i.e. the event falls at a uniform time of the run.
     """
+    arrs = {tel: np.asarray(snr, float) for tel, snr in snr_by_tel.items()}
+    if any(a.ndim == 2 for a in arrs.values()):
+        n_block = min(a.shape[0] if a.ndim == 2 else 1 for a in arrs.values())
+        stack = np.stack([a[:n_block] if a.ndim == 2 else np.broadcast_to(a, (n_block, a.shape[-1]))
+                          for a in arrs.values()])                        # (n_tel, n_block, n_radii)
+        ok = np.all(np.isfinite(stack), axis=(0, 2))
+        if not ok.any():
+            raise ValueError("no time block is usable in every telescope")
+        tels = list(arrs)
+        per_block = [detection_probability({t: stack[i, b] for i, t in enumerate(tels)}, threshold, min_ntel,
+                                           snr_scatter) for b in np.flatnonzero(ok)]
+        return np.mean(per_block, axis=0)
     probs = []
-    for tel, snr in snr_by_tel.items():
+    for tel, snr in arrs.items():
         thr = threshold[tel] if isinstance(threshold, Mapping) else threshold
-        probs.append(ndtr((np.asarray(snr, float) - thr) / snr_scatter))
+        probs.append(ndtr((snr - thr) / snr_scatter))
     n = len(probs)
     dist = np.zeros((n + 1, len(probs[0])))
     dist[0] = 1.0
@@ -596,26 +786,52 @@ def r50(radii_m: Sequence[float], prob: Sequence[float], level: float = 0.5) -> 
 
 # ───────────────────────────── the table ────────────────────────────────────
 
+def scale_quantiles(per_run_csv: str, correction: str, quantiles: Tuple[float, float] = (0.16, 0.84),
+                    sf_mode: str = "measured") -> Tuple[float, float]:
+    """
+    (low, high) quantiles of the per-run, per-channel SNR scale of ``correction`` in the calibration's
+    ``snr_calibration_per_run.csv``: the run-to-run spread of the calibration, for ``min_size_table(scale_band=)``.
+    """
+    df = pd.read_csv(per_run_csv)
+    df = df[(df["correction"] == correction) & (df["sf_mode"] == sf_mode)].dropna(subset=["scale"])
+    if df.empty:
+        raise ValueError(f"{per_run_csv}: no calibration rows for {correction!r} / {sf_mode!r}")
+    lo, hi = np.quantile(df["scale"].to_numpy(), quantiles)
+    return float(lo), float(hi)
+
+
 def min_size_table(targets: Sequence[TargetStar], profiles: Sequence[NoiseProfile], cfg: MinSizeConfig,
                    curves: Mapping[str, RateCurve], *, noise_models: Sequence[str] = ("measured", "theory"),
-                   focus_gains: Sequence[float] = (1.0,),
-                   progress: Optional[Callable[[str], None]] = None) -> pd.DataFrame:
+                   focus_gains: Sequence[float] = (1.0,), excess_scalings: Optional[Sequence[str]] = None,
+                   scale_band: Optional[Tuple[float, float]] = None, return_efficiency: bool = False,
+                   progress: Optional[Callable[[str], None]] = None):
     """
-    R50 for every target x run (night, observation) x noise model x LST focus gain x telescope
-    configuration (each telescope alone, ``k``of``n`` of the run's telescopes) x false-alarm rate
+    R50 for every target x run (night, observation) x noise model x LST focus gain x excess scaling x
+    telescope configuration (each telescope alone, ``k``of``n`` of the run's telescopes) x false-alarm rate
     (cfg.coinc_far_per_hr, then cfg.extra_fars).
 
     ``curves``: {channel: RateCurve} (rate_curves). The thresholds are those of the real data for both
     noise models, so ``theory`` isolates the effect of the noise on the SNR. Single telescopes use the
-    same rate per telescope-hour as the coincidence FAR; arrays use coincidence_threshold. Rows:
-    target, mag_B, star_mas, night, observation, noise, lst_focus, config, far_per_hr, threshold,
-    thr_extrapolated, r50_m, r50_status, snr_100m (mean over the telescopes, interpolated).
+    same rate per telescope-hour as the coincidence FAR; arrays use coincidence_threshold.
+
+    ``excess_scalings`` (default ``(cfg.excess_scaling,)``): the measured noise is evaluated for each of them
+    ("star" and "total" bracket how the excess noise follows a change of the star light; ``theory`` has none).
+    ``scale_band`` = (low, high) absolute values of ``snr_scale`` (``scale_quantiles``): ``r50_lo_m`` / ``r50_hi_m``
+    are the R50 at the high / low scale, the calibration's run-to-run spread (measured noise only).
+
+    Rows: target, mag_B, star_mas, night, observation, noise, excess_scaling ("none" for theory), lst_focus, config,
+    far_per_hr, threshold, thr_extrapolated, thr_at_floor (the threshold is the candidate floor: the FAR is then
+    only an upper bound, the R50 conservative), r50_m, r50_status, r50_lo_m, r50_hi_m, snr_100m (mean over the
+    telescopes, interpolated; the median over the time blocks when the noise is time resolved).
+    With ``return_efficiency`` also returns the long table of the detection probability per radius (the same keys
+    without the r50 columns, plus radius_m and eff).
     """
     from ..simulation.instruments import Instrument
 
     say = progress or (lambda m: None)
     fars = [cfg.coinc_far_per_hr, *cfg.extra_fars]
     tol = cfg.tolerance_s()
+    scalings = tuple(excess_scalings) if excess_scalings else (cfg.excess_scaling,)
     runs: Dict[Tuple[str, str], List[NoiseProfile]] = {}
     for p in profiles:
         runs.setdefault((p.night, p.observation), []).append(p)
@@ -627,71 +843,186 @@ def min_size_table(targets: Sequence[TargetStar], profiles: Sequence[NoiseProfil
     def threshold(channels: Tuple[str, ...], k: int, far: float):
         key = (channels, k, far)
         if key not in thr_cache:
-            sub = {ch: curves[ch] for ch in channels}
-            thr_cache[key] = single_threshold(sub[channels[0]], far) if k == 1 else \
-                coincidence_threshold(sub, tol, far, k)
+            thr_cache[key] = array_threshold(curves, channels, k, far, tol)
         return thr_cache[key]
 
-    rows = []
+    def stretch(snr, factor):
+        return {c: v * factor for c, v in snr.items()}
+
+    rows, eff_rows = [], []
     for star in targets:
         templates = {kind: template_family(star, cfg, instr) for kind, instr in instruments.items()}
         say(f"{star.name}: B={star.mag_B:.2f}, r*={star.angular_radius_mas:.4f} mas")
         for (night, obs), group in runs.items():
             group = [p for p in group if p.channel in curves]
             for noise in noise_models:
-                for gain in focus_gains:
-                    if gain != 1.0 and not any(p.telescope.startswith("LST") for p in group):
-                        continue
-                    snr = {}
-                    for p in group:
-                        kind = "LST" if p.telescope.startswith("LST") else "MAGIC"
-                        snr[p.channel] = per_telescope_snr(star, p, templates[kind], cfg,
-                                                           theory_only=(noise == "theory"), focus_gain=gain)
-                    chans = tuple(snr)
-                    configs = [(p.telescope, (p.channel,), 1) for p in group]
-                    configs += [(f"{k}of{len(chans)}", chans, k) for k in range(2, len(chans) + 1)]
-                    for label, sel, k in configs:
-                        mean_snr = np.mean([snr[c] for c in sel], axis=0)
-                        for far in fars:
-                            thr, extrap = threshold(sel, k, far)
-                            prob = detection_probability({c: snr[c] for c in sel}, thr, k, cfg.snr_scatter)
-                            value, status = r50(cfg.radii_m, prob)
-                            rows.append({
-                                "target": star.name, "mag_B": star.mag_B, "star_mas": star.angular_radius_mas,
-                                "night": night, "observation": obs, "noise": noise, "lst_focus": gain,
-                                "config": label, "far_per_hr": far, "threshold": thr,
-                                "thr_extrapolated": extrap, "r50_m": value, "r50_status": status,
-                                "snr_100m": float(np.interp(np.log(100.0), np.log(cfg.radii_m), mean_snr))})
-    return pd.DataFrame(rows)
+                for scaling in (scalings if noise == "measured" else ("none",)):
+                    cfg_s = cfg if scaling == "none" else replace(cfg, excess_scaling=scaling)
+                    for gain in focus_gains:
+                        if gain != 1.0 and not any(p.telescope.startswith("LST") for p in group):
+                            continue
+                        snr = {}
+                        for p in group:
+                            kind = "LST" if p.telescope.startswith("LST") else "MAGIC"
+                            snr[p.channel] = per_telescope_snr(star, p, templates[kind], cfg_s,
+                                                               theory_only=(noise == "theory"), focus_gain=gain)
+                        chans = tuple(snr)
+                        configs = [(p.telescope, (p.channel,), 1) for p in group]
+                        configs += [(f"{k}of{len(chans)}", chans, k) for k in range(2, len(chans) + 1)]
+                        typical = {c: (np.nanmedian(v, axis=0) if v.ndim == 2 else v) for c, v in snr.items()}
+                        for label, sel, k in configs:
+                            mean_snr = np.mean([typical[c] for c in sel], axis=0)
+                            for far in fars:
+                                thr, extrap = threshold(sel, k, far)
+                                chosen = {c: snr[c] for c in sel}
+                                prob = detection_probability(chosen, thr, k, cfg.snr_scatter)
+                                value, status = r50(cfg.radii_m, prob)
+                                lo = hi = float("nan")
+                                if scale_band is not None and noise == "measured":
+                                    lo = r50(cfg.radii_m, detection_probability(
+                                        stretch(chosen, scale_band[1] / cfg.snr_scale), thr, k, cfg.snr_scatter))[0]
+                                    hi = r50(cfg.radii_m, detection_probability(
+                                        stretch(chosen, scale_band[0] / cfg.snr_scale), thr, k, cfg.snr_scatter))[0]
+                                key = {"target": star.name, "mag_B": star.mag_B, "star_mas": star.angular_radius_mas,
+                                       "night": night, "observation": obs, "noise": noise,
+                                       "excess_scaling": scaling, "lst_focus": gain, "config": label,
+                                       "far_per_hr": far}
+                                rows.append({**key, "threshold": thr, "thr_extrapolated": extrap,
+                                             "thr_at_floor": bool(thr <= SNR_FLOOR + 1e-9),
+                                             "r50_m": value, "r50_status": status, "r50_lo_m": lo, "r50_hi_m": hi,
+                                             "snr_100m": float(np.interp(np.log(100.0), np.log(cfg.radii_m),
+                                                                         mean_snr))})
+                                if return_efficiency:
+                                    eff_rows.extend({**key, "radius_m": float(r), "eff": float(e)}
+                                                    for r, e in zip(cfg.radii_m, prob))
+    table = pd.DataFrame(rows)
+    return (table, pd.DataFrame(eff_rows)) if return_efficiency else table
 
 
 def summarize(table: pd.DataFrame) -> pd.DataFrame:
-    """Median / min / max R50 over the runs, per target, noise, focus, configuration and FAR."""
-    keys = ["target", "mag_B", "star_mas", "noise", "lst_focus", "config", "far_per_hr"]
-    g = table.groupby(keys)
-    return g.agg(r50_median=("r50_m", "median"), r50_min=("r50_m", "min"), r50_max=("r50_m", "max"),
-                 n_runs=("r50_m", "size"), n_unreached=("r50_status", lambda s: int((s == "above_grid").sum())),
-                 n_bound=("r50_status", lambda s: int((s == "below_grid").sum()))).reset_index()
+    """Median / min / max R50 over the runs, per target, noise, excess scaling, focus, configuration and FAR."""
+    keys = ["target", "mag_B", "star_mas", "noise", "excess_scaling", "lst_focus", "config", "far_per_hr"]
+    keys = [k for k in keys if k in table]
+    agg = dict(r50_median=("r50_m", "median"), r50_min=("r50_m", "min"), r50_max=("r50_m", "max"),
+               n_runs=("r50_m", "size"), n_unreached=("r50_status", lambda s: int((s == "above_grid").sum())),
+               n_bound=("r50_status", lambda s: int((s == "below_grid").sum())))
+    if "r50_lo_m" in table:
+        agg.update(r50_lo_median=("r50_lo_m", "median"), r50_hi_median=("r50_hi_m", "median"))
+    if "thr_at_floor" in table:
+        agg.update(thr_at_floor=("thr_at_floor", "max"))
+    return table.groupby(keys).agg(**agg).reset_index()
+
+
+# ───────────────────────────── impact parameter ─────────────────────────────
+
+# impact parameters are sampled at these fractions of H(R) / 2; the last nodes catch the diffraction fringes
+# that stay detectable outside the geometric shadow of a bright star
+B_FRACTIONS = (0.0, 0.2, 0.4, 0.6, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.8, 2.2, 2.8, 3.5, 4.5, 6.0)
+B_MAX_M = 15000.0
+WIDTH_WAVELENGTH_M = 420e-9           # for H(r) (Fresnel scale), as tests/observing_time_vs_kbo_size.py
+
+
+def shadow_width_m(radius_m, star: TargetStar, cfg: MinSizeConfig, wavelength_m: float = WIDTH_WAVELENGTH_M):
+    """Effective shadow width H(r) of Nihei et al. 2007 (``upper_limits.effective_shadow_width_m``) of ``star``."""
+    from .upper_limits import effective_shadow_width_m
+
+    r_star = star.angular_radius_mas * mas_to_rad * cfg.distance_au * AU_m
+    return effective_shadow_width_m(radius_m, cfg.distance_au, wavelength_m, r_star)
+
+
+def impact_nodes(radius_m: float, star: TargetStar, cfg: MinSizeConfig, wavelength_m: float = WIDTH_WAVELENGTH_M
+                 ) -> np.ndarray:
+    """Impact parameters [m] at which the detection probability of radius ``radius_m`` is sampled."""
+    nodes = 0.5 * float(shadow_width_m(radius_m, star, cfg, wavelength_m)) * np.asarray(B_FRACTIONS)
+    return nodes[nodes <= B_MAX_M]
+
+
+def width_signals(star: TargetStar, cfg: MinSizeConfig, instrument, radii: Optional[Sequence[float]] = None,
+                  wavelength_m: float = WIDTH_WAVELENGTH_M) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
+    """
+    {radius_m: (b_m (n_b,), I - 1 (n_b, n_bin))}: the event of ``star`` seen through ``instrument`` at the impact
+    parameters ``impact_nodes``, on the bin cadence of ``template_family``. One engine (its radial grid covers the
+    largest impact parameter) and the Fresnel profile of each radius is computed once.
+    """
+    radii = [float(r) for r in (cfg.radii_m if radii is None else radii)]
+    nodes = {r: impact_nodes(r, star, cfg, wavelength_m) for r in radii}
+    b_top = max(float(n.max()) for n in nodes.values())
+    wide = _engine(star, replace(cfg, impact_parameter_m=b_top), instrument)
+    v = cfg.velocity_mps()
+    t_fine = _fine_time(cfg)
+    out = {}
+    for r in radii:
+        rows = []
+        for b in nodes[r]:
+            x_m, intensity = wide.compute(KBOConfig(r, cfg.distance_au, float(b)), star.angular_radius_mas)
+            rows.append(_binned_residual(x_m / v, intensity, t_fine, cfg))
+        out[r] = (nodes[r], np.array(rows))
+    return out
+
+
+def detection_width(star: TargetStar, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
+                    templates: Mapping[str, Mapping[float, np.ndarray]],
+                    signals: Mapping[str, Mapping[float, Tuple[np.ndarray, np.ndarray]]], *, k: int, threshold: float,
+                    focus_gain: float = 1.0, theory_only: bool = False,
+                    wavelength_m: float = WIDTH_WAVELENGTH_M) -> pd.DataFrame:
+    """
+    Detection width W(R) = 2 integral_0^inf P(R, b) db of the telescopes ``group`` (one run, the channels that
+    take part) detecting an event with ``k`` of them above ``threshold``: P(R, b) is ``detection_probability`` of
+    the expected SNR of the event at impact parameter b searched with the b = 0 template (what the search does).
+    ``templates`` and ``signals``: {"MAGIC" | "LST": template_family / width_signals} of ``star``, on cfg.radii_m.
+    The telescope offsets (~100 m) are neglected against the impact parameters (km).
+
+    Rows: radius_m, h_m (H(R)), width_m, eff_eff (W / H, it can exceed 1), p_b0 (P at b = 0, the efficiency used
+    elsewhere), p_tail (P at the outermost node; > ~0.02 means the integral is cut too early).
+    """
+    evals = {p.channel: snr_evaluator(star, p, cfg, theory_only=theory_only, focus_gain=focus_gain) for p in group}
+    kind = {p.channel: "LST" if _is_lst(p) else "MAGIC" for p in group}
+    rows = []
+    for r in cfg.radii_m:
+        r = float(r)
+        snr = {}
+        for ch, f in evals.items():
+            b, resid = signals[kind[ch]][r]
+            vals = np.array([f(templates[kind[ch]][r], resid[i]) for i in range(len(b))])    # (n_b,) or (n_b, n_block)
+            snr[ch] = vals if vals.ndim == 1 else vals.T
+        prob = detection_probability(snr, threshold, k, cfg.snr_scatter)
+        width = 2.0 * _trapz(prob, b)
+        h = float(shadow_width_m(r, star, cfg, wavelength_m))
+        rows.append({"radius_m": r, "h_m": h, "width_m": width, "eff_eff": width / h, "p_b0": float(prob[0]),
+                     "p_tail": float(prob[-1])})
+    return pd.DataFrame(rows)
 
 
 # ───────────────────────────── calibration against injections ───────────────
 
 # correction -> (snr_scale, snr_scatter) fitted on array injections (examples/studies/min_size_calibration.py,
-# outputs/min_size/calibration/snr_calibration.csv). 2026-11-12: 2026-03-08 + 2026-08-19, 7 runs x 3 channels,
-# 50 trials x 12 radii (50-400 m), measured star fraction, FAR 1/h. Median over runs of (measured peak SNR) /
-# (step-1 prediction), per-run range 0.67-1.65 (whitened), 0.89-1.58 (butter_1), 0.87-6.5 (raw); scatter is the
-# absolute 1.4826 MAD of the peak SNR below SNR 20. The likelihood fit on the detections gives 0.96 / 1.15 / 1.37.
-SNR_CALIBRATION: Dict[str, Tuple[float, float]] = {"whitened": (0.912, 1.234), "raw": (1.539, 2.250),
-                                                   "butter_1": (1.082, 1.463)}
+# outputs/min_size/calibration/snr_calibration.csv). Median over runs of (measured peak SNR) / (prediction); scatter
+# is the absolute 1.4826 MAD of the peak SNR below SNR 20.
+# SNR_CALIBRATION is for the time-resolved noise (MinSizeConfig.time_resolved, the default). 2026-11-16: 2025-12-16
+# (5 single-channel runs) + 2026-03-08 + 2026-08-19 (7 runs x 3 channels), 26 run-channels, 50 trials x 12 radii
+# (50-400 m), measured star fraction. Per-run-channel scale range 0.74-1.37 (whitened), 0.71-1.13 (butter_1),
+# 0.37-1.23 (raw); the likelihood fit on the detections gives 1.15 / 1.02 / 0.63 (whitened / butter_1 / raw).
+SNR_CALIBRATION: Dict[str, Tuple[float, float]] = {"whitened": (1.072, 1.174), "raw": (0.655, 1.774),
+                                                   "butter_1": (0.971, 1.221)}
+# SNR_CALIBRATION_STATIONARY is for one PSD per run (time_resolved=False; step 2, 2026-11-12: 2026-03-08 +
+# 2026-08-19, 21 run-channels, per-run range 0.67-1.65 (whitened), 0.89-1.58 (butter_1), 0.87-6.5 (raw)). Its spread
+# is 1.5-6 times larger than the time-resolved one, and HD170263 is 38-42 % too pessimistic with it.
+SNR_CALIBRATION_STATIONARY: Dict[str, Tuple[float, float]] = {"whitened": (0.912, 1.234), "raw": (1.539, 2.250),
+                                                              "butter_1": (1.082, 1.463)}
 
 CALIBRATION_RADII_M = (50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 120.0, 150.0, 200.0, 250.0, 300.0, 400.0)
 _RUN = ["night", "observation", "correction", "sf_mode"]
 
 
 def observed_target(obs, star_mas: float = 0.03) -> TargetStar:
-    """The star of a logged run as a TargetStar (the injections and the search bank use 0.03 mas)."""
+    """
+    The star of a logged run as a TargetStar of angular radius ``star_mas`` (a synthetic run carries its own
+    ``angular_radius_mas``, which wins). ``calibrate_run`` and ``predicted_snr`` pass the star's own size,
+    ``mimic.observed_star_mas`` (from its B magnitude), as the per-star search bank uses.
+    """
     teff = teff_from_spectral_type(obs.spectral_type) if obs.spectral_type else None
-    return TargetStar(obs.name, float(obs.mag_B), star_mas, float(teff or 10000.0), obs.spectral_type)
+    radius = getattr(obs, "angular_radius_mas", None) or star_mas
+    return TargetStar(obs.name, float(obs.mag_B), float(radius), float(teff or 10000.0), obs.spectral_type)
 
 
 def calibration_runs(log, nights, profiles: Sequence[NoiseProfile], *, include_excluded: bool = False,
@@ -716,23 +1047,27 @@ def _is_lst(p: NoiseProfile) -> bool:
 def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig, ccfg, correction: str,
                   radii: Sequence[float] = CALIBRATION_RADII_M, *, sf_mode: str = "measured",
                   n_trials: Optional[int] = None, seed: int = 0, bank=None,
-                  patterns: Optional[dict] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+                  patterns: Optional[dict] = None,
+                  full_candidates: Optional[list] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Array injections of one run and one correction (``noise_removal.injection_efficiency_array``).
 
-    The search is the one that wrote real_candidates.csv: the method's reshaped bank of
-    ``mimic.search_templates(ccfg.mimic, ...)``. The injected pattern is the observed star through the
+    The search is the one that writes real_candidates.csv: the method's reshaped bank of the star's own size,
+    ``mimic.star_bank(ccfg.mimic, obs, ...)`` (``bank`` replaces it, e.g. the fixed 0.03 mas bank of the older
+    search). The injected pattern is the observed star, at its own size (``mimic.observed_star_mas``), through the
     telescope's own response (``injection_patterns``), diluted by the star fraction of each channel:
     ``sf_mode="measured"`` is the profile's (what the prediction uses), ``"model"`` the noise
     model's. ``patterns`` is a {kind: {R: (x, I)}} cache that is filled in (pass the same dict for the
-    corrections of one run and the same ``radii``). Returns (trials, candidates, run_calib);
+    corrections of one run and the same ``radii``). ``full_candidates`` (a list) is extended with the candidates of
+    the blind search of each uninjected channel (run keys, channel, telescope, search row): the rate curves of a
+    synthetic run, which has no real_candidates.csv. Returns (trials, candidates, run_calib);
     run_calib has the full-run search statistics per channel (SNR-trace std and MAD-sigma, number of
     candidates) to compare with real_candidates.csv.
     """
     from ..observations.photometry import good_time_lightcurve
     from ..simulation.instruments import Instrument
     from ..simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU
-    from .mimic import _template_duration, bin_lightcurve, search_lightcurve, search_templates
+    from .mimic import _template_duration, bin_lightcurve, observed_star_mas, search_lightcurve, star_bank
     from .noise_removal import (build_methods, injection_efficiency_array, reshaped_templates,
                                 shadow_direction_enu)
 
@@ -744,7 +1079,7 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
         ccfg = replace(ccfg, n_trials=n_trials)
     name = csv_method_name(correction)
     v_bank = shadow_velocity_opposition(ccfg.mimic.distance_au + EARTH_SEMIMAJOR_AXIS_AU)
-    templates_raw = bank if bank is not None else search_templates(ccfg.mimic, v_bank)
+    templates_raw = bank if bank is not None else star_bank(ccfg.mimic, obs, v_bank)
     dur = _template_duration(templates_raw)
     channels = [p.channel for p in group]
     lcs = {ch: obs.lightcurve(ch) for ch in channels}
@@ -758,11 +1093,13 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
         corrected[ch] = methods[ch].correct(lcs[ch])
         real = bin_lightcurve(good_time_lightcurve(corrected[ch], obs.good_time), ccfg.mimic.bin_samples)
         rows, _, c = search_lightcurve(real, bank_m[ch], ccfg.snr_floor, dur, ccfg.mimic.sigma_window_s)
+        if full_candidates is not None:
+            full_candidates.extend({**key, "channel": ch, "telescope": p.telescope, **r} for r in rows)
         calib_rows.append({**key, "channel": ch, "telescope": p.telescope, "n_candidates": len(rows),
                            "n_ge5": sum(r["snr"] >= 5.0 for r in rows), "snr_std": c["snr_std"],
                            "snr_mad_sigma": c["snr_mad_sigma"], "live_s": len(real.time) * real.dt})
 
-    star = observed_target(obs)
+    star = observed_target(obs, observed_star_mas(obs))                  # the star's own size, whatever the bank
     patterns = {} if patterns is None else patterns
     for kind in {"LST" if _is_lst(p) else "MAGIC" for p in group}:
         if kind not in patterns:
@@ -857,6 +1194,7 @@ def thresholds_table(curves: Mapping[str, RateCurve], tolerance_s: float, fars: 
         for ch, curve in curves.items():
             thr, ext = single_threshold(curve, far)
             rows.append({"far_per_hr": far, "config": ch, "k": 1, "threshold": thr, "thr_extrapolated": ext,
+                         "thr_at_floor": bool(thr <= SNR_FLOOR + 1e-9),
                          "timeslide_threshold": np.nan, "timeslide_resolved": np.nan})
         for k in range(2, n + 1):
             thr, ext = coincidence_threshold(curves, tolerance_s, far, k)
@@ -866,7 +1204,8 @@ def thresholds_table(curves: Mapping[str, RateCurve], tolerance_s: float, fars: 
                 ts = float(ok["snr"].min()) if len(ok) else np.nan
                 resolved = bool(far * float(far_check["slide_hours"].iloc[0]) >= 1.0)
             rows.append({"far_per_hr": far, "config": f"{k}of{n}", "k": k, "threshold": thr,
-                         "thr_extrapolated": ext, "timeslide_threshold": ts, "timeslide_resolved": resolved})
+                         "thr_extrapolated": ext, "thr_at_floor": bool(thr <= SNR_FLOOR + 1e-9),
+                         "timeslide_threshold": ts, "timeslide_resolved": resolved})
     return pd.DataFrame(rows)
 
 
@@ -933,28 +1272,43 @@ def measured_efficiency(trials: pd.DataFrame, cands: pd.DataFrame, thresholds: p
 
 
 def predicted_snr(runs, cfg: MinSizeConfig, corrections: Sequence[str],
-                  radii: Sequence[float] = CALIBRATION_RADII_M) -> pd.DataFrame:
+                  radii: Sequence[float] = CALIBRATION_RADII_M, bank: Optional[Mapping[float, np.ndarray]] = None
+                  ) -> pd.DataFrame:
     """
     Step-1 expected SNR (``per_telescope_snr``, snr_scale 1) of the observed star of every run at the
     injection radii, per correction and channel: night, observation, correction, channel, telescope,
-    radius_m, snr_pred. ``runs``: ``calibration_runs``.
+    radius_m, snr_pred, block. ``runs``: ``calibration_runs``. ``block`` is 0 for a stationary prediction;
+    with ``cfg.time_resolved`` (and block PSDs in the profiles) every time block is a row (NaN where unusable).
+
+    ``bank`` ({radius: I - 1} at the bin cadence, e.g. ``bank_residuals``): the event of each radius is searched
+    with the best template of the bank (``bank_snr``), as the real search does, instead of its own (perfectly
+    matched) template.
     """
     from ..simulation.instruments import Instrument
+    from .mimic import observed_star_mas
 
     cfg_r = replace(cfg, radii_m=np.asarray(radii, float), snr_scale=1.0)
     instruments = {k: Instrument(k, filter_type=cfg.filter_type, site="LaPalma") for k in ("MAGIC", "LST")}
     rows = []
     for night, obs, group in runs:
-        star = observed_target(obs)
+        star = observed_target(obs, observed_star_mas(obs))
         kinds = {"LST" if _is_lst(p) else "MAGIC" for p in group}
         templates = {k: template_family(star, cfg_r, instruments[k]) for k in kinds}
         for corr in corrections:
             cfg_c = replace(cfg_r, correction=corr)
             for p in group:
-                snr = per_telescope_snr(star, p, templates["LST" if _is_lst(p) else "MAGIC"], cfg_c)
+                family = templates["LST" if _is_lst(p) else "MAGIC"]
+                if bank is None:
+                    snr = np.atleast_2d(per_telescope_snr(star, p, family, cfg_c))
+                else:
+                    f = snr_evaluator(star, p, cfg_c)
+                    best = np.array([np.max([f(t, signal=family[float(r)]) for t in bank.values()], axis=0)
+                                     for r in radii])                          # (n_radii,) or (n_radii, n_block)
+                    snr = np.atleast_2d(best) if best.ndim == 1 else best.T
                 rows.extend({"night": night.name, "observation": obs.name, "correction": corr,
                              "channel": p.channel, "telescope": p.telescope, "radius_m": float(r),
-                             "snr_pred": float(v)} for r, v in zip(radii, snr))
+                             "snr_pred": float(v), "block": b}
+                            for b, row in enumerate(snr) for r, v in zip(radii, row))
     return pd.DataFrame(rows)
 
 
@@ -963,21 +1317,28 @@ def predicted_efficiency(snr_pred: pd.DataFrame, thresholds: pd.DataFrame,
     """
     Detection probability from ``predicted_snr`` at the same thresholds as ``measured_efficiency``, with the
     expected SNRs multiplied by ``scales[correction][0]`` and a scatter ``scales[correction][1]`` (default
-    1, 1). Rows: night, observation, correction, radius_m, config, far_per_hr, threshold, eff_pred.
+    1, 1). With several ``block`` rows the probability is averaged over the blocks (``detection_probability``).
+    Rows: night, observation, correction, radius_m, config, far_per_hr, threshold, eff_pred.
     """
     scales = scales or {}
+    if "block" not in snr_pred:
+        snr_pred = snr_pred.assign(block=0)
     thr = {(r.far_per_hr, r.config): r.threshold for r in thresholds.itertuples()}
     fars = sorted({f for f, _ in thr})
     rows = []
     for (night, obs, corr), g in snr_pred.groupby(["night", "observation", "correction"]):
         scale, scatter = scales.get(corr, (1.0, 1.0))
         radii = np.sort(g["radius_m"].unique())
-        snr = {ch: gg.sort_values("radius_m")["snr_pred"].to_numpy() * scale for ch, gg in g.groupby("channel")}
+        snr = {}
+        for ch, gg in g.groupby("channel"):
+            v = gg.pivot(index="block", columns="radius_m", values="snr_pred").sort_index()[radii].to_numpy() * scale
+            snr[ch] = v[0] if len(v) == 1 else v
         n = len(snr)
         for far in fars:
             for ch, v in snr.items():
                 if (far, ch) in thr:
                     p = ndtr((v - thr[(far, ch)]) / scatter)
+                    p = p if p.ndim == 1 else np.nanmean(p, axis=0)
                     rows.extend({"night": night, "observation": obs, "correction": corr, "radius_m": float(r),
                                  "config": ch, "far_per_hr": far, "threshold": thr[(far, ch)], "eff_pred": float(x)}
                                 for r, x in zip(radii, p))
@@ -1008,6 +1369,9 @@ def fit_snr_calibration(trials: pd.DataFrame, snr_pred: pd.DataFrame, run_calib:
     snr_std, snr_mad_sigma) with the full-run SNR-trace statistics of ``run_calib`` (the robust-scatter
     hypothesis: scale ~ snr_std); summary is the median over runs per correction, sf_mode and telescope kind.
     """
+    if "block" in snr_pred:                                   # time-resolved prediction: the median block
+        snr_pred = (snr_pred.groupby([c for c in snr_pred.columns if c not in ("block", "snr_pred")],
+                                     as_index=False)["snr_pred"].median())
     t = trials.dropna(subset=["peak_snr"])
     mad = lambda x: 1.4826 * float(np.median(np.abs(x - np.median(x))))                   # noqa: E731
     cells = (t.groupby(_RUN + ["channel", "radius_m"])["peak_snr"]
@@ -1043,12 +1407,13 @@ def scale_by_deviance(eff_meas: pd.DataFrame, snr_pred: pd.DataFrame, thresholds
     """
     ``snr_scale`` that maximises the binomial likelihood of the measured detections (``measured_efficiency``
     rows of ``correction``, one ``config``, one ``far``; defaults: the highest-k configuration present with
-    k <= 2, the largest FAR) given the prediction. Returns (best scale, DataFrame scale / loglike).
+    k <= 2, else the first channel; the largest FAR) given the prediction. Returns (best scale, DataFrame scale / loglike).
     """
     m = eff_meas[eff_meas["correction"] == correction]
     far = float(m["far_per_hr"].max()) if far is None else far
     if config is None:
-        config = sorted((c for c in m["config"].unique() if "of" in c), key=lambda c: int(c.split("of")[0]))[0]
+        multi = sorted((c for c in m["config"].unique() if "of" in c), key=lambda c: int(c.split("of")[0]))
+        config = multi[0] if multi else sorted(m["config"].unique())[0]          # single-channel data: one channel
     m = m[(m["config"] == config) & (m["far_per_hr"] == far)]
     sp = snr_pred[snr_pred["correction"] == correction]
     rows = []

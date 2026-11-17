@@ -126,7 +126,8 @@ def cmd_mimic(args):
     nights = [n.name for n in _select(log, args)]
     cfg = MimicConfig(corrections=tuple(args.corrections), snr_threshold=args.snr_threshold,
                       n_surrogates=args.surrogates, n_shifts=args.shifts, bin_samples=args.bin_samples,
-                      star_mas=args.star_mas, distance_au=args.distance_au, seed=args.seed,
+                      star_mas=args.star_mas if args.star_mas is not None else 0.03,
+                      per_star_size=args.star_mas is None, distance_au=args.distance_au, seed=args.seed,
                       sigma_window_s=args.sigma_window)
     res = run_mimic(log, nights, cfg, include_excluded=args.include_excluded,
                     progress=lambda m: print(m, file=sys.stderr))
@@ -201,7 +202,8 @@ def build_parser():
     s.add_argument("--surrogates", type=int, default=20, help="Gaussian surrogates per run and correction")
     s.add_argument("--shifts", type=int, default=200, help="time-slide realizations per run")
     s.add_argument("--bin-samples", type=int, default=10, help="samples averaged before the search")
-    s.add_argument("--star-mas", type=float, default=0.03, help="stellar angular radius of the templates")
+    s.add_argument("--star-mas", type=float, default=None,
+                   help="fixed stellar angular radius [mas] of the templates (default: each star's own, from its B magnitude)")
     s.add_argument("--distance-au", type=float, default=40.0)
     s.add_argument("--sigma-window", type=float, default=None,
                    help="window [s] of the empirical filter-output sigma (default: detrend window)")

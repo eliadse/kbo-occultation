@@ -41,7 +41,7 @@ from ..observations.photometry import LightCurve, good_time_lightcurve
 from ..simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU, shadow_velocity_opposition
 from .injection import inject_occultation
 from .mimic import (MimicConfig, _template_duration, bin_lightcurve, search_lightcurve,
-                    search_templates)
+                    search_templates, star_bank, star_mas_for)
 from .spectra import lightcurve_psd
 
 BUTTERWORTH_CUTOFFS_HZ = (0.3, 0.5, 1.0, 2.0, 3.0)
@@ -395,15 +395,16 @@ def run_comparison(log, nights=None, cfg: Optional[ComparisonConfig] = None, *,
     Returns ``(thresholds, efficiency, candidates)`` DataFrames:
     thresholds: one row per method (pooled over runs and channels);
     efficiency: night, observation, channel, mag_B, method, radius_m, efficiency, threshold;
-    candidates: every real candidate above ``snr_floor`` per method.
+    candidates: every real candidate above ``snr_floor`` per method (with the angular radius ``star_mas`` of the
+    template bank of its star, to tell lists made with another bank).
     """
     cfg = cfg or ComparisonConfig()
     say = progress or (lambda m: None)
     rng = np.random.default_rng(cfg.seed)
     v = shadow_velocity_opposition(cfg.mimic.distance_au + EARTH_SEMIMAJOR_AXIS_AU)
-    templates_raw = search_templates(cfg.mimic, v)
-    radii = list(templates_raw)
-    dur = _template_duration(templates_raw)
+    reference = search_templates(cfg.mimic, v)                  # radii and span are those of every star's bank
+    radii = list(reference)
+    dur = _template_duration(reference)
 
     jobs = []     # (night, obs, ch, lc_full, methods, templates_m)
     cand_rows, hours_by_method = [], {}
@@ -412,6 +413,8 @@ def run_comparison(log, nights=None, cfg: Optional[ComparisonConfig] = None, *,
         for obs in night.stars.values():
             if not obs.has_cache:
                 continue
+            templates_raw = star_bank(cfg.mimic, obs, v)          # the bank of this star's size
+            star_mas = star_mas_for(cfg.mimic, obs)
             for ch in night.channels:
                 lc_full = obs.lightcurve(ch)
                 dc_key = night.telescope(ch).dc_key
@@ -428,8 +431,8 @@ def run_comparison(log, nights=None, cfg: Optional[ComparisonConfig] = None, *,
                     snr_by_method.setdefault(name, []).extend(r["snr"] for r in rows)
                     for r in rows:
                         cand_rows.append({"night": night.name, "observation": obs.name, "channel": ch,
-                                          "method": name, **r})
-                    jobs.append((night, obs, ch, lc_full, m, tm))
+                                          "method": name, "star_mas": star_mas, **r})
+                    jobs.append((night, obs, ch, lc_full, m, tm, templates_raw))
 
     thr_rows, thr = [], {}
     for name, hours in hours_by_method.items():
@@ -439,7 +442,7 @@ def run_comparison(log, nights=None, cfg: Optional[ComparisonConfig] = None, *,
                          "far_per_hr": cfg.far_per_hr, "threshold": thr[name]})
 
     eff_rows = []
-    for night, obs, ch, lc_full, m, tm in jobs:
+    for night, obs, ch, lc_full, m, tm, templates_raw in jobs:
         say(f"{night.name} {obs.name} {ch} {m.name}: injections")
         corrected_full = m.correct(lc_full)
         sf = star_fraction_for(obs, night.telescope(ch).name.split("-")[0])

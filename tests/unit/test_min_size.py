@@ -323,6 +323,8 @@ def test_calibrated_config_and_theory_noise_is_not_scaled(tiny_cfg):
     from dataclasses import replace
     c = replace(tiny_cfg, correction="whitened").calibrated()
     assert (c.snr_scale, c.snr_scatter) == ms.SNR_CALIBRATION["whitened"]
+    c = replace(tiny_cfg, correction="whitened", time_resolved=False).calibrated()
+    assert (c.snr_scale, c.snr_scatter) == ms.SNR_CALIBRATION_STATIONARY["whitened"]
     unknown = replace(tiny_cfg, correction="nonexistent", snr_scale=1.3).calibrated()
     assert unknown.snr_scale == 1.3
     star, profile = ms.TargetStar("t", 9.0, 0.03), _profile("MAGIC-2", "A")
@@ -333,3 +335,246 @@ def test_calibrated_config_and_theory_noise_is_not_scaled(tiny_cfg):
     np.testing.assert_allclose(base, scaled)
     assert np.allclose(2.0 * ms.per_telescope_snr(star, profile, templates, tiny_cfg),
                        ms.per_telescope_snr(star, profile, templates, replace(tiny_cfg, snr_scale=2.0)))
+
+
+# ───────────────────────────── time-resolved noise, floor flags, mismatch, widths ─
+
+BLOCK_NPERSEG = 1024
+
+
+def _block_grid():
+    return np.linspace(0.0, FS / 2.0, BLOCK_NPERSEG // 2 + 1)
+
+
+def _blocked(telescope="MAGIC-2", channel="A", excess_blocks=None, excess_full=None):
+    p = _profile(telescope, channel)
+    fb = _block_grid()
+    p.block_freq = fb
+    p.S_excess_blocks = np.array(excess_blocks)
+    p.S_excess = np.interp(p.freq, fb, np.mean(p.S_excess_blocks, axis=0)) if excess_full is None else excess_full
+    return p
+
+
+def _radius_templates(radii=(30.0, 100.0), depth=0.05):
+    return {float(r): _template(0.05 + 0.05 * i, depth)[1] for i, r in enumerate(radii)}
+
+
+def _small_cfg(radii=(30.0, 100.0), **kw):
+    return ms.MinSizeConfig(radii_m=np.array(radii), **kw)
+
+
+def test_time_resolved_equals_stationary_for_stationary_noise():
+    fb = _block_grid()
+    red = 3e-6 / np.maximum(fb, 0.5) ** 2
+    p = _blocked(excess_blocks=[red, red, red])
+    star = ms.TargetStar("s", 8.0, 0.03)
+    cfg = _small_cfg(correction="raw")
+    tpl = _radius_templates()
+    stat = ms.per_telescope_snr(star, p, tpl, cfg, time_resolved=False)
+    block = ms.per_telescope_snr(star, p, tpl, cfg, time_resolved=True)
+    assert block.shape == (3, 2) and stat.shape == (2,)
+    np.testing.assert_allclose(block, np.tile(stat, (3, 1)), rtol=0.03)
+    # no blocks in the profile: the stationary result, whatever the request
+    q = _profile("MAGIC-2", "A")
+    assert ms.per_telescope_snr(star, q, tpl, cfg, time_resolved=True).shape == (2,)
+
+
+def test_time_resolved_probability_is_higher_for_intermittent_noise():
+    fb = _block_grid()
+    quiet, burst = np.zeros_like(fb), 3e-3 / np.maximum(fb, 0.5) ** 2
+    p = _blocked(excess_blocks=[quiet, quiet, quiet, burst])
+    star = ms.TargetStar("s", 8.0, 0.03)
+    cfg = _small_cfg(correction="raw")
+    tpl = _radius_templates()
+    stat = ms.per_telescope_snr(star, p, tpl, cfg, time_resolved=False)
+    block = ms.per_telescope_snr(star, p, tpl, cfg, time_resolved=True)
+    assert np.all(block[:3] > stat) and np.all(block[3] < stat)         # the bursts raise the full-run level
+    thr = 0.5 * (stat[1] + block[0, 1])
+    p_stat = ms.detection_probability({"A": stat}, thr, 1, 0.5)
+    p_time = ms.detection_probability({"A": block}, thr, 1, 0.5)
+    assert p_time[1] > p_stat[1]
+    manual = np.mean([ms.detection_probability({"A": row}, thr, 1, 0.5) for row in block], axis=0)
+    np.testing.assert_allclose(p_time, manual)
+
+
+def test_detection_probability_skips_blocks_not_usable_in_every_telescope():
+    a = np.array([[8.0, 9.0], [np.nan, np.nan], [2.0, 3.0]])
+    b = np.array([[8.0, 9.0], [9.0, 9.0], [2.0, 3.0]])
+    p = ms.detection_probability({"A": a, "B": b}, 5.0, 2, 0.01)
+    np.testing.assert_allclose(p, [0.5, 0.5], atol=1e-6)               # blocks 0 and 2 count
+    with pytest.raises(ValueError):
+        ms.detection_probability({"A": np.full((2, 2), np.nan)}, 5.0, 1)
+
+
+def test_profiles_roundtrip_with_blocks_and_old_files(tmp_path):
+    fb = _block_grid()
+    p = _blocked(excess_blocks=[np.abs(np.sin(fb)), np.full_like(fb, np.nan)])
+    plain = _profile("LST-1", "B")
+    path = str(tmp_path / "p.npz")
+    ms.save_profiles([p, plain], path)
+    q, r = ms.load_profiles(path)
+    assert q.n_block == 2 and r.n_block == 0 and r.block_freq is None
+    np.testing.assert_allclose(q.block_freq, fb)
+    np.testing.assert_allclose(q.S_excess_blocks, p.S_excess_blocks)
+
+
+def test_blockwise_welch_flags_missing_blocks_and_tracks_a_burst():
+    from kbo_occultation.analysis.spectra import blockwise_welch
+
+    rng = np.random.default_rng(5)
+    n = 40000
+    time = np.arange(n) / FS
+    x = 0.01 * rng.standard_normal(n)
+    x[30000:] *= 5.0                                           # the last quarter is 25 times noisier in power
+    freq, psd = blockwise_welch(time, x, FS, 4, nperseg=BLOCK_NPERSEG)
+    assert psd.shape == (4, BLOCK_NPERSEG // 2 + 1) and np.all(np.isfinite(psd))
+    level = psd[:, 20:-20].mean(axis=1)
+    assert level[3] > 5.0 * level[0] and level[0] == pytest.approx(2 * 0.01 ** 2 / FS, rel=0.15)
+    keep = np.r_[0:10000, 30000:40000]                         # a 20000-sample hole: blocks 1 and 2 have no data
+    freq, psd = blockwise_welch(time[keep], x[keep], FS, 4, nperseg=BLOCK_NPERSEG)
+    assert np.isfinite(psd[0]).all() and np.isnan(psd[1]).all() and np.isnan(psd[2]).all()
+
+
+def test_thresholds_at_the_candidate_floor_are_flagged():
+    quiet = ms.RateCurve(np.array([]), 1.0)                    # no candidates at all: the rate is 0 at the floor
+    busy = ms.RateCurve(3.0 + np.random.default_rng(7).exponential(1.0, 4000), 50.0)
+    t = ms.thresholds_table({"A": quiet, "B": busy}, 0.4, [1.0])
+    row = t.set_index("config")
+    assert bool(row.loc["A", "thr_at_floor"]) and row.loc["A", "threshold"] == ms.SNR_FLOOR
+    assert not bool(row.loc["B", "thr_at_floor"]) and row.loc["B", "threshold"] > ms.SNR_FLOOR
+
+
+def test_expected_snr_with_a_signal_is_matched_only_for_the_template():
+    _, tmpl = _template(0.05)
+    _, other = _template(0.2)
+    other = other * np.linalg.norm(tmpl) / np.linalg.norm(other)              # same norm, other shape
+    f = _grid()
+    white = np.full_like(f, 2 * 0.01 ** 2 / FS)
+    red = white + 1e-4 / np.maximum(f, 1.0)
+    for psd in (white, red):
+        matched = ms.expected_snr(tmpl, f, psd, FS)
+        assert ms.expected_snr(tmpl, f, psd, FS, signal=tmpl) == pytest.approx(matched, rel=1e-9)
+        shifted = np.roll(tmpl, 7)
+        assert ms.expected_snr(tmpl, f, psd, FS, signal=shifted) == pytest.approx(matched, rel=1e-6)   # best lag
+    # for white noise no other template of the same norm does better than the matched one (Cauchy-Schwarz)
+    assert ms.expected_snr(tmpl, f, white, FS, signal=other) < ms.expected_snr(other, f, white, FS)
+    assert ms.expected_snr(other, f, white, FS, signal=tmpl) < ms.expected_snr(tmpl, f, white, FS)
+    bank = {"narrow": tmpl, "wide": other}
+    for psd in (white, red):
+        assert ms.bank_snr(other, bank, f, psd, FS) == pytest.approx(
+            max(ms.expected_snr(t, f, psd, FS, signal=other) for t in bank.values()))
+    assert ms.bank_snr(other, bank, f, white, FS) == pytest.approx(ms.expected_snr(other, f, white, FS), rel=1e-9)
+    assert ms.bank_snr(tmpl, {"wide": other}, f, white, FS) < ms.expected_snr(tmpl, f, white, FS)
+
+
+def _fake_width_inputs(amplitude_of_b, n_b=7):
+    b = np.arange(n_b, dtype=float)
+    tpl = 100.0 * _template(0.1, 0.05)[1]                                    # large SNR in any noise
+    radius = 30.0
+    resid = np.array([amplitude_of_b(x) * tpl for x in b])
+    return ({"MAGIC": {radius: tpl}}, {"MAGIC": {radius: (b, resid)}}, b)
+
+
+def test_detection_width_of_a_step_and_of_a_certain_detection():
+    star = ms.TargetStar("s", 8.0, 0.03)
+    cfg = _small_cfg(radii=(30.0,))
+    group = [_profile("MAGIC-2", "A")]
+    templates, signals, b = _fake_width_inputs(lambda x: 1.0 if x <= 3.0 else 0.0)
+    w = ms.detection_width(star, group, cfg, templates, signals, k=1, threshold=6.0)
+    assert w["width_m"].iloc[0] == pytest.approx(2 * (3.0 + 0.5), rel=1e-6)    # trapezoid across the step
+    assert w["p_b0"].iloc[0] == pytest.approx(1.0) and w["p_tail"].iloc[0] < 1e-6
+    assert w["h_m"].iloc[0] == pytest.approx(float(ms.shadow_width_m(30.0, star, cfg)))
+    templates, signals, b = _fake_width_inputs(lambda x: 1.0)
+    w = ms.detection_width(star, group, cfg, templates, signals, k=1, threshold=6.0)
+    assert w["width_m"].iloc[0] == pytest.approx(2 * b[-1], rel=1e-6) and w["p_tail"].iloc[0] > 0.99
+
+
+def test_impact_nodes_scale_with_the_shadow_width():
+    star = ms.TargetStar("s", 8.0, 0.03)
+    cfg = _small_cfg()
+    nodes = ms.impact_nodes(100.0, star, cfg)
+    assert nodes[0] == 0.0 and np.all(np.diff(nodes) > 0) and nodes.max() <= ms.B_MAX_M
+    half = 0.5 * float(ms.shadow_width_m(100.0, star, cfg))
+    assert np.any(np.isclose(nodes, half)) and nodes.max() > 2.0 * half
+
+
+def test_expected_snr_at_the_impact_parameter_of_the_edge_is_lower_with_real_patterns():
+    # one real engine: the event at b = H/2 is much weaker than at b = 0, and the b = 0 row is the template
+    from kbo_occultation.simulation.instruments import Instrument
+
+    star = ms.generic_targets([8.0])[0]
+    cfg = ms.MinSizeConfig(radii_m=np.array([300.0]), x_half_m=6000.0, dx_m=8.0, n_star_side=16, n_r_grid=1500)
+    inst = Instrument("MAGIC", site="LaPalma")
+    sig = ms.width_signals(star, cfg, inst)
+    tpl = ms.template_family(star, cfg, inst)
+    b, resid = sig[300.0]
+    np.testing.assert_allclose(resid[0], tpl[300.0], atol=1e-6)
+    depth = -resid.min(axis=1)
+    assert depth[0] > 3.0 * depth[list(b).index(next(x for x in b if x >= 0.5 * float(ms.shadow_width_m(300.0, star, cfg))))]
+
+
+def test_column_map_parser_feeds_the_catalogue_loader(tmp_path):
+    assert ms.parse_column_map(None) is None and ms.parse_column_map("") is None
+    colmap = ms.parse_column_map("name=Name, mag_B=Bmag,angular_radius_mas=theta")
+    assert colmap == {"name": "Name", "mag_B": "Bmag", "angular_radius_mas": "theta"}
+    path = tmp_path / "cat.csv"
+    path.write_text("Name,Bmag,theta\nHD 1,7.2,0.02\nHD 2,8.8,\n")
+    a, b = ms.load_target_catalogue(str(path), colmap)
+    assert (a.name, a.mag_B, a.angular_radius_mas) == ("HD 1", 7.2, 0.02)
+    assert b.angular_radius_mas == pytest.approx(ms.star_radius_from_mag(8.8))        # empty radius: from the magnitude
+    for bad in ("mag_B", "mag_B=", "colour=B"):
+        with pytest.raises(ValueError):
+            ms.parse_column_map(bad)
+
+
+# ───────────────────────────── the template bank follows the star ───────────
+
+class _Obs:
+    def __init__(self, mag_B=None, spectral_type=None, angular_radius_mas=None):
+        self.mag_B, self.spectral_type = mag_B, spectral_type
+        if angular_radius_mas is not None:
+            self.angular_radius_mas = angular_radius_mas
+
+
+def test_star_size_of_the_bank_follows_the_magnitude_with_fallbacks():
+    from kbo_occultation.analysis.mimic import MimicConfig, observed_star_mas, star_mas_for
+
+    cfg = MimicConfig()
+    assert star_mas_for(cfg, _Obs(9.0)) == pytest.approx(ms.star_radius_from_mag(9.0))
+    assert star_mas_for(cfg, _Obs(None)) == cfg.star_mas                              # no magnitude: the fixed value
+    assert star_mas_for(cfg, _Obs(float("nan"))) == cfg.star_mas
+    assert star_mas_for(MimicConfig(per_star_size=False), _Obs(9.0)) == cfg.star_mas   # old pipeline
+    assert star_mas_for(cfg, _Obs(9.0, angular_radius_mas=0.02)) == 0.02              # a synthetic run's own size
+    assert observed_star_mas(_Obs(8.0)) == pytest.approx(ms.star_radius_from_mag(8.0))
+    assert observed_star_mas(_Obs(None), default=0.05) == 0.05
+
+
+def test_smaller_star_gives_sharper_templates_and_star_bank_is_cached():
+    from kbo_occultation.analysis.mimic import MimicConfig, search_templates, star_bank
+
+    cfg = MimicConfig(template_radii_m=(100.0,))
+    v = 25000.0
+    fixed = search_templates(cfg, v)[100.0][1]
+    small = search_templates(cfg, v, 0.0119)[100.0][1]
+    assert small.min() < fixed.min() - 0.005                                          # sharper fringes, deeper dip
+    np.testing.assert_array_equal(search_templates(cfg, v)[100.0][1], fixed)          # the default call is unchanged
+    a, b = star_bank(cfg, _Obs(9.0), v), star_bank(cfg, _Obs(9.0), v)
+    assert a is b                                                                     # cache hit
+    np.testing.assert_allclose(a[100.0][1], small, atol=1e-3)                         # B = 9 is 0.0119 mas
+    assert star_bank(cfg, _Obs(9.0), v) is not star_bank(cfg, _Obs(7.0), v)
+    assert star_bank(cfg, _Obs(9.0, "A0V"), v) is not a                               # another temperature, another bank
+
+
+def test_the_star_matched_bank_keeps_the_snr_that_the_fixed_bank_loses():
+    from kbo_occultation.simulation.instruments import Instrument
+
+    star = ms.TargetStar("B9", 9.0, ms.star_radius_from_mag(9.0))
+    cfg = ms.MinSizeConfig(radii_m=np.array([100.0]), n_star_side=24, n_r_grid=2000)
+    template = ms.template_family(star, cfg, Instrument("MAGIC", site="LaPalma"))[100.0]
+    f = _grid()
+    white = np.full_like(f, 2 * 0.01 ** 2 / FS)
+    perfect = ms.expected_snr(template, f, white, FS)
+    matched = ms.bank_snr(template, ms.bank_residuals(cfg, star=star), f, white, FS)
+    fixed = ms.bank_snr(template, ms.bank_residuals(cfg), f, white, FS)
+    assert matched > 0.95 * perfect                                                   # 4 radii and the band cost a few %
+    assert fixed < 0.8 * perfect                                                      # the 0.03 mas bank loses ~40 %

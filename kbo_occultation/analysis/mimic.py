@@ -44,7 +44,7 @@ from ..observations.photometry import LightCurve, good_time_lightcurve
 from ..simulation.engine import OccultationEngine
 from ..simulation.kinematics import (EARTH_SEMIMAJOR_AXIS_AU, ShadowKinematics,
                                      shadow_velocity_opposition)
-from ..simulation.physics import AU_m, mas_to_rad
+from ..simulation.physics import AU_m, mas_to_rad, star_radius_from_mag, teff_from_spectral_type
 from .coincidence import (TelescopeSearchResult, accidental_coincidence_rate,
                           coincidence_tolerance_s, match_coincidences)
 from .matched_filter import (Candidate, compute_baseline_and_sigma, find_candidates,
@@ -62,7 +62,8 @@ class MimicConfig:
     corrections: Sequence[str] = CORRECTIONS
     snr_threshold: float = 3.0
     template_radii_m: Sequence[float] = (50.0, 100.0, 300.0, 1000.0)
-    star_mas: float = 0.03
+    star_mas: float = 0.03                   # angular radius of the templates; the fixed value / fallback of ``star_bank``
+    per_star_size: bool = True               # templates of the observed star (size from its B magnitude): ``star_bank``
     distance_au: float = 40.0
     star_temperature_K: float = 10000.0
     band: BandpassConfig = field(default_factory=lambda: BandpassConfig(320.0, 450.0, 21))
@@ -79,19 +80,66 @@ class MimicConfig:
 
 # ───────────────────────── templates and searching ──────────────────────────
 
-def search_templates(cfg: MimicConfig, v_mps: float) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
-    """{radius: (template_time_s, intensity)}, shared span so one detrend window fits all."""
+def search_templates(cfg: MimicConfig, v_mps: float, star_mas: Optional[float] = None,
+                     temperature_K: Optional[float] = None) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
+    """
+    {radius: (template_time_s, intensity)}, shared span so one detrend window fits all. The star is
+    ``cfg.star_mas`` / ``cfg.star_temperature_K`` unless ``star_mas`` / ``temperature_K`` are given
+    (``star_bank`` gives them for an observed star).
+    """
+    star_mas = cfg.star_mas if star_mas is None else star_mas
+    temperature_K = cfg.star_temperature_K if temperature_K is None else temperature_K
     half = 10000.0
     grid = GridConfig(half, int(2 * half / 5.0))
-    r_star = cfg.star_mas * mas_to_rad * cfg.distance_au * AU_m
-    engine = OccultationEngine(StarConfig(cfg.star_temperature_K, cfg.star_mas), cfg.band, grid,
+    r_star = star_mas * mas_to_rad * cfg.distance_au * AU_m
+    engine = OccultationEngine(StarConfig(temperature_K, star_mas), cfg.band, grid,
                                NumericalConfig(n_r_grid=4000, n_star_side=48),
                                r_max_m=1.3 * (half + 2 * r_star))
     out = {}
     for radius in cfg.template_radii_m:
-        x_m, intensity = engine.compute(KBOConfig(radius, cfg.distance_au, 0.0), cfg.star_mas)
+        x_m, intensity = engine.compute(KBOConfig(radius, cfg.distance_au, 0.0), star_mas)
         out[float(radius)] = (x_m / v_mps, intensity)
     return out
+
+
+def observed_star_mas(obs, default: float = 0.03) -> float:
+    """
+    Angular radius [mas] of the star of ``obs``: its own ``angular_radius_mas`` (synthetic runs), else from its B magnitude
+    (``physics.star_radius_from_mag``, constant surface brightness), else ``default``.
+    """
+    own = getattr(obs, "angular_radius_mas", None)
+    if own:
+        return float(own)
+    mag = getattr(obs, "mag_B", None)
+    if mag is not None and np.isfinite(mag):
+        return star_radius_from_mag(float(mag))
+    return default
+
+
+def star_mas_for(cfg: MimicConfig, obs) -> float:
+    """Angular radius [mas] of the templates for the observed star ``obs``: the star's own (``observed_star_mas``)
+    with ``cfg.per_star_size``, else the fixed ``cfg.star_mas``."""
+    return observed_star_mas(obs, cfg.star_mas) if cfg.per_star_size else cfg.star_mas
+
+
+_BANK_CACHE: Dict[tuple, Dict[float, Tuple[np.ndarray, np.ndarray]]] = {}
+
+
+def star_bank(cfg: MimicConfig, obs, v_mps: float) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
+    """
+    The template bank of the star ``obs`` (``search_templates`` with its angular radius, ``star_mas_for``, and its
+    temperature from the spectral type, else ``cfg.star_temperature_K``). The star's size is known, the KBO's is not,
+    so the bank spans the KBO radii only. Cached by star size, temperature, radii, distance, band and velocity: do not
+    modify the returned arrays.
+    """
+    star_mas = star_mas_for(cfg, obs)
+    teff = teff_from_spectral_type(getattr(obs, "spectral_type", None)) if cfg.per_star_size else None
+    temperature = float(teff) if teff else cfg.star_temperature_K
+    key = (round(star_mas, 6), round(temperature, 1), tuple(float(r) for r in cfg.template_radii_m),
+           cfg.distance_au, (cfg.band.lam_min_nm, cfg.band.lam_max_nm, cfg.band.n_lambda), round(float(v_mps), 3))
+    if key not in _BANK_CACHE:
+        _BANK_CACHE[key] = search_templates(cfg, v_mps, star_mas, temperature)
+    return _BANK_CACHE[key]
 
 
 def bin_lightcurve(lc: LightCurve, n: int) -> LightCurve:
@@ -340,14 +388,14 @@ def run_mimic(log, nights=None, cfg: Optional[MimicConfig] = None, *, include_ex
     cand_rows, event_rows, live_rows, tail_rows, ref_rows, calib_rows = [], [], [], [], [], []
 
     v = shadow_velocity_opposition(cfg.distance_au + EARTH_SEMIMAJOR_AXIS_AU)
-    templates = search_templates(cfg, v)
-    dur = _template_duration(templates)
+    dur = _template_duration(search_templates(cfg, v))               # the span is the same for every star
     tol = coincidence_tolerance_s(ORM_ARRAY, ShadowKinematics(v), dur)
 
     for night in log.select(nights, include_excluded):
         for obs in night.stars.values():
             if not obs.has_cache:
                 continue
+            templates = star_bank(cfg, obs, v)
             t0, t1 = obs.time_span()
             aux = AuxData(night, cfg, t0, t1)
             p90 = {ch: aux.run_covariates(ch) for ch in night.channels}

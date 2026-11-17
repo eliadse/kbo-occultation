@@ -39,6 +39,11 @@ def _spt_ordinal(letter, number):
 _SPT_GRID = np.array(sorted((_spt_ordinal(k[0], k[1:]), v) for k, v in SPT_TEFF.items())).T
 
 
+def star_radius_from_mag(mag_B: float, ref_mag: float = 7.0, ref_radius_mas: float = 0.03) -> float:
+    """Angular radius [mas] at fixed surface brightness: r = r_ref * 10^(-0.2 (B - B_ref))."""
+    return float(ref_radius_mas * 10.0 ** (-0.2 * (mag_B - ref_mag)))
+
+
 def teff_from_spectral_type(spt):
     """
     T_eff [K] of a B0-A5 spectral type string such as 'B9.5IIIp(HgMn)' (luminosity class and

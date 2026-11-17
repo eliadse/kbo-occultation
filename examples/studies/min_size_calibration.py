@@ -12,9 +12,13 @@ Needs ``outputs/noise_removal/real_candidates.csv`` (examples/studies/noise_remo
 the nights and corrections used here. Per-run results are written to ``<out>/trials/`` as they finish
 and reused on a rerun, so an interrupted run resumes.
 
+The prediction is time resolved by default (the noise level of each ~16 s block of the run, as the search
+normalises with a local scatter); ``--stationary`` uses one PSD per run. ``--min-channels 1`` adds the
+single-telescope nights (2025-12-16), which only calibrate the single-telescope SNR scale.
+
 Usage:
-    python examples/studies/min_size_calibration.py [NIGHT ...] [--trials 50]
-        [--corrections whitened raw butter_1] [--radii 50 100 300] [--model-sf-trials 20]
+    python examples/studies/min_size_calibration.py [NIGHT ...] [--trials 50] [--min-channels 2]
+        [--corrections whitened raw butter_1] [--radii 50 100 300] [--model-sf-trials 20] [--stationary]
 Smoke test:
     python examples/studies/min_size_calibration.py 2026-08-19 --trials 5 --corrections whitened \
         --radii 50 100 300 --model-sf-trials 0 --shifts 200 --out outputs/min_size/calibration_smoke
@@ -37,6 +41,8 @@ from kbo_occultation.observations.log import load_observation_log
 ap = argparse.ArgumentParser()
 ap.add_argument("nights", nargs="*", default=["2026-03-08", "2026-08-19"])
 ap.add_argument("--trials", type=int, default=50, help="injections per run, channel and radius")
+ap.add_argument("--min-channels", type=int, default=2, help="runs with fewer cached channels are skipped")
+ap.add_argument("--stationary", action="store_true", help="one PSD per run instead of one per time block")
 ap.add_argument("--corrections", nargs="+", default=["whitened", "raw", "butter_1"])
 ap.add_argument("--radii", nargs="+", type=float, default=list(ms.CALIBRATION_RADII_M))
 ap.add_argument("--model-sf-trials", type=int, default=20,
@@ -48,6 +54,10 @@ ap.add_argument("--out", default=os.path.join("outputs", "min_size", "calibratio
 ap.add_argument("--seed", type=int, default=0)
 ap.add_argument("--include-excluded", action="store_true")
 ap.add_argument("--force", action="store_true", help="go on although the candidate list looks stale")
+ap.add_argument("--observations", nargs="+", default=None, help="only these runs (e.g. HD170263), for a smoke test")
+ap.add_argument("--fixed-bank", action="store_true",
+                help="search with the fixed 0.03 mas template bank of the old pipeline instead of the star's own "
+                     "(the injected star is always the run's own size)")
 args = ap.parse_args()
 
 OUT = args.out
@@ -80,30 +90,39 @@ def style(ax):
 
 
 log = load_observation_log()
-cfg = ms.MinSizeConfig()
+cfg = ms.MinSizeConfig(time_resolved=not args.stationary)
 ccfg = ComparisonConfig(n_trials=args.trials, seed=args.seed)
 tol = cfg.tolerance_s()
 radii = [float(r) for r in args.radii]
 
 # ───────────────────────────── noise profiles and runs ──────────────────────
 prof_path = args.profiles or os.path.join("outputs", "min_size", "profiles_" + "_".join(args.nights) + ".npz")
-if os.path.exists(prof_path):
-    profiles = ms.load_profiles(prof_path)
-    say(f"profiles: {len(profiles)} from {prof_path}")
-else:
-    say("measuring noise profiles (slow: loads the light curves)")
-    profiles = ms.measure_noise_profiles(log, args.nights, cfg, include_excluded=args.include_excluded, progress=say)
-    os.makedirs(os.path.dirname(prof_path), exist_ok=True)
-    ms.save_profiles(profiles, prof_path)
-runs = ms.calibration_runs(log, args.nights, profiles, include_excluded=args.include_excluded)
+profiles = ms.load_or_measure_profiles(log, args.nights, cfg, prof_path, include_excluded=args.include_excluded,
+                                       progress=say)
+runs = ms.calibration_runs(log, args.nights, profiles, include_excluded=args.include_excluded,
+                           min_channels=args.min_channels)
+if args.observations:
+    runs = [r for r in runs if r[1].name in set(args.observations)]
 if not runs:
-    sys.exit("no run with >= 2 channels and noise profiles in the selected nights")
+    sys.exit(f"no run with >= {args.min_channels} channels and noise profiles in the selected nights")
 say("runs: " + ", ".join(f"{n.name}/{o.name}({len(g)}ch)" for n, o, g in runs))
 mag = {(n.name, o.name): o.mag_B for n, o, _ in runs}
 
 # ───────────────────────────── candidate list check, thresholds, FAR ────────
-cand_df = pd.read_csv(args.candidates, usecols=["night", "observation", "method"])
+cand_df = pd.read_csv(args.candidates, usecols=lambda c: c in ("night", "observation", "method", "star_mas"))
 problems = []
+if not args.fixed_bank:
+    # the list must come from the same bank as the injections: each star's own (noise_removal.run_comparison)
+    if "star_mas" not in cand_df:
+        problems.append("no star_mas column: the list was made with the fixed 0.03 mas bank, the search here uses "
+                        "each star's own")
+    else:
+        from kbo_occultation.analysis.mimic import observed_star_mas
+        listed = cand_df.groupby(["night", "observation"])["star_mas"].mean()
+        for n, o, _ in runs:
+            if (n.name, o.name) in listed.index and abs(listed[(n.name, o.name)] / observed_star_mas(o) - 1.0) > 0.01:
+                problems.append(f"{n.name}/{o.name}: list bank {listed[(n.name, o.name)]:.4f} mas, "
+                                f"star {observed_star_mas(o):.4f} mas")
 seen_runs = set(zip(cand_df["night"], cand_df["observation"]))          # a run with no candidates under a method is fine
 for n, o, _ in runs:
     if (n.name, o.name) not in seen_runs:
@@ -146,11 +165,11 @@ all_trials, all_cands, all_calib = [], [], []
 
 def run_injections(corr, sf_mode, n_trials, night, obs, group, patterns):
     global bank
-    stem = os.path.join(OUT, "trials", f"{night.name}_{obs.name}_{corr}_{sf_mode}")
+    stem = os.path.join(OUT, "trials", f"{night.name}_{obs.name}_{corr}_{sf_mode}" + ("_fixedbank" if args.fixed_bank else ""))
     paths = [f"{stem}_{k}.csv" for k in ("trials", "cands", "calib")]
     if all(os.path.exists(p) for p in paths):
         return [read_csv_or_empty(p) for p in paths]
-    if bank is None:
+    if args.fixed_bank and bank is None:
         from kbo_occultation.analysis.mimic import search_templates
         from kbo_occultation.simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU, shadow_velocity_opposition
         bank = search_templates(ccfg.mimic, shadow_velocity_opposition(ccfg.mimic.distance_au + EARTH_SEMIMAJOR_AXIS_AU))
@@ -209,7 +228,8 @@ summary = summary.merge(pd.DataFrame(dev), on=["correction", "sf_mode", "kind"],
 summary.to_csv(os.path.join(OUT, "snr_calibration.csv"), index=False)
 say("SNR calibration (measured / predicted), median over runs:")
 say(summary.round(3).to_string(index=False))
-say("SNR_CALIBRATION = " + repr({k: (round(a, 3), round(b, 3)) for k, (a, b) in scales.items()}))
+say(("SNR_CALIBRATION_STATIONARY = " if args.stationary else "SNR_CALIBRATION = ")
+    + repr({k: (round(a, 3), round(b, 3)) for k, (a, b) in scales.items()}))
 
 keys = ["night", "observation", "correction", "radius_m", "config", "far_per_hr"]
 pred0 = pd.concat([ms.predicted_efficiency(snr_pred[snr_pred["correction"] == c],
@@ -243,7 +263,7 @@ say(ex.round(3).to_string(index=False))
 # ───────────────────────────── figures ──────────────────────────────────────
 for corr in args.corrections:
     sub = eff[(eff["correction"] == corr) & (eff["sf_mode"] == "measured") & (eff["far_per_hr"] == 1.0)]
-    run_keys = sorted(set(zip(sub["night"], sub["observation"])))
+    run_keys = sorted(set(zip(sub.loc[sub["config"] == "2of3", "night"], sub.loc[sub["config"] == "2of3", "observation"])))
     if not run_keys:
         continue
     cfgs = [ORM_ARRAY.by_channel(c).name for c in "ACB"] + ["2of3"]
@@ -297,6 +317,38 @@ if len(pr):
     axes[0, 0].legend(fontsize=8, frameon=False)
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "scale_vs_snr_std.png"), dpi=140)
+    plt.close(fig)
+
+# does the scale depend on the star (magnitude, star fraction)?
+sf_of = {(p.night, p.observation, p.channel): p.star_fraction for p in profiles}
+pm = per_run[per_run["sf_mode"] == "measured"].copy()
+pm["mag_B"] = [mag.get((n, o), np.nan) for n, o in zip(pm["night"], pm["observation"])]
+pm["star_fraction"] = [sf_of.get((n, o, c), np.nan) for n, o, c in zip(pm["night"], pm["observation"], pm["channel"])]
+pm = pm.dropna(subset=["scale", "mag_B", "star_fraction"])
+if len(pm):
+    from scipy.stats import spearmanr
+    corrs = [c for c in args.corrections if c in set(pm["correction"])]
+    fig, axes = plt.subplots(2, len(corrs), figsize=(4.4 * len(corrs), 6.4), squeeze=False)
+    for j, corr in enumerate(corrs):
+        sub = pm[pm["correction"] == corr]
+        for i, (col, label) in enumerate((("mag_B", "B magnitude of the star"), ("star_fraction", "measured star fraction"))):
+            ax = axes[i, j]
+            style(ax)
+            for tel, g in sub.groupby("telescope"):
+                ax.scatter(g[col], g["scale"], s=26, color=COLORS.get(tel, INK), marker=MARKERS.get(tel, "D"),
+                           label=tel, edgecolor="#fcfcfb", linewidth=0.8)
+            ax.axhline(1.0, color=MUTED, lw=1, ls=":")
+            ax.set_yscale("log")
+            ax.set_xlabel(label, fontsize=8, color=MUTED)
+            if len(sub) > 3:
+                rho, pval = spearmanr(sub[col], sub["scale"])
+                ax.set_title(f"{corr}: Spearman {rho:+.2f} (p = {pval:.2f})", fontsize=9, color=INK)
+                say(f"scale vs {col}, {corr}: Spearman {rho:+.2f} (p = {pval:.2f}, n = {len(sub)})")
+            if j == 0:
+                ax.set_ylabel("measured / predicted SNR", fontsize=8, color=MUTED)
+    axes[0, 0].legend(fontsize=8, frameon=False)
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "scale_vs_mag.png"), dpi=140)
     plt.close(fig)
 
 fig, axes = plt.subplots(1, len(args.corrections), figsize=(4.6 * len(args.corrections), 3.8), squeeze=False)

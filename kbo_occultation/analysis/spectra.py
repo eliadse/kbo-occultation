@@ -79,6 +79,43 @@ def segmented_welch(time, signal, fs, nperseg_target: int = SEGMENT_SAMPLES,
     return freq_common, psd, info
 
 
+def blockwise_welch(time, signal, fs, n_block: int, nperseg: int = 1024, average: str = "median",
+                    min_coverage: float = 0.5):
+    """
+    Welch PSD of ``n_block`` equal time blocks of one series, gap-aware as ``segmented_welch``
+    (a block's runs are split where the time step exceeds 1.5 / fs, runs shorter than ``nperseg``
+    are skipped, the run estimates are averaged weighted by length). ``average="median"`` (the
+    default) makes each run's estimate robust to noise bursts, like the median-based scatter of the
+    matched-filter normalisation.
+
+    Returns (freq, psd): ``psd`` is (n_block, nperseg // 2 + 1); a block that has less than
+    ``min_coverage`` of its samples in usable runs is NaN.
+    """
+    time, signal = np.asarray(time), np.asarray(signal)
+    dt = 1.0 / fs
+    edges = np.linspace(time[0], time[-1] + dt, n_block + 1)
+    bounds = np.searchsorted(time, edges)
+    freq = np.linspace(0.0, fs / 2.0, nperseg // 2 + 1)
+    out = np.full((n_block, len(freq)), np.nan)
+    for k in range(n_block):
+        a, b = bounds[k], bounds[k + 1]
+        if b - a < nperseg:
+            continue
+        cuts = np.concatenate([[0], np.where(np.diff(time[a:b]) > 1.5 * dt)[0] + 1, [b - a]])
+        accum, used = 0.0, 0
+        for s, e in zip(cuts[:-1], cuts[1:]):
+            if e - s < nperseg:
+                continue
+            _, pxx = welch(signal[a + s:a + e], fs=fs, window="hann", nperseg=nperseg,
+                           noverlap=nperseg // 2, scaling="density", average=average)
+            accum = accum + pxx * (e - s)
+            used += e - s
+        expected = (edges[k + 1] - edges[k]) * fs
+        if used and used >= min_coverage * expected:
+            out[k] = accum / used
+    return freq, out
+
+
 def lightcurve_psd(lc, nperseg_target: int = SEGMENT_SAMPLES, return_info: bool = False):
     """segmented_welch of a LightCurve's fractional flux."""
     return segmented_welch(lc.time, fractional_flux(lc.signal), 1.0 / lc.dt,
