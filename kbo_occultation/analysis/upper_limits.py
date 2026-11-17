@@ -41,16 +41,19 @@ class EfficiencyCurve:
     """
     Detection efficiency vs radius, e.g. from
     injection_batch.efficiency_curve. Calling it interpolates linearly,
-    clips to [0, 1], and returns 0 outside the measured radius range
-    (no extrapolated sensitivity is claimed).
+    clips to [0, 1] (``clip=False`` keeps values above 1: an efficiency
+    relative to H(r), e.g. a detection width over H, can exceed 1), and
+    returns 0 outside the measured radius range (no extrapolated
+    sensitivity is claimed).
     """
     radii_m: np.ndarray
     efficiency: np.ndarray
+    clip: bool = True
 
     def __call__(self, radius_m):
         radius_m = np.asarray(radius_m, dtype=float)
         eps = np.interp(radius_m, self.radii_m, self.efficiency, left=0.0, right=0.0)
-        return np.clip(eps, 0.0, 1.0)
+        return np.clip(eps, 0.0, 1.0) if self.clip else eps
 
 
 @dataclass

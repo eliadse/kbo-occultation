@@ -218,3 +218,71 @@ def effective_shadow_width(wavelength, distance, kbo_radius, star_radius):
         star_radius.to(u.m).value,
     )
     return width_m * u.m
+
+
+def observing_time_per_size(radii_m, width_m, velocity, distance, diameter_break=80 * u.km, q_s=4.0):
+    """
+    Observing time per expected *detected* event for objects of one size, as in the "observing time vs KBO
+    size" plot: 1 / event_rate(W(R), v, Sigma(> 2R), d) with the detection width W(R) in place of the
+    shadow width H(R) (W = H * efficiency; see ``min_size.detection_width``).
+
+    ``radii_m``, ``width_m`` : KBO radii and detection widths [m] (arrays). ``velocity``, ``distance``,
+    ``diameter_break``, ``q_s`` as in :func:`event_rate` and :func:`surface_density`. The cumulative density
+    uses the small-object power law, valid for 2R <= diameter_break. Returns a Quantity [s] per radius
+    (inf where W = 0).
+    """
+    radii = np.asarray(radii_m, dtype=float)
+    width = _as_quantity(np.asarray(width_m, dtype=float), u.m, "detection width")
+    sigma = surface_density(diameter_break, 2.0 * radii * u.m, q_s)
+    with np.errstate(divide="ignore"):
+        return (1.0 / event_rate(width, velocity, sigma, distance)).to(u.s)
+
+
+def detected_event_rate(radii_m, width_m, velocity, distance, diameter_break=80 * u.km, q_s=4.0,
+                        extrapolate=True, n_grid=400):
+    """
+    Rate of detected occultations of one star, integrated over the size distribution:
+
+        mu = v (180 deg / pi / d)^2  integral W(R(D)) |dSigma/dD| dD,
+
+    with Sigma the cumulative surface density of Nihei et al. 2007 (eq. 11 below the break diameter, the
+    q_L = 4.8 power law above it, continuous at the break) and W(R) the detection width of the objects of
+    diameter D = 2R (``min_size.detection_width``). For a constant W it reduces to ``event_rate`` with
+    Sigma(> D_min).
+
+    The integral runs from the smallest to the largest radius of ``radii_m`` (W interpolated in log R and log W;
+    W = 0 contributes nothing). With ``extrapolate`` it goes on to D = 1000 km with W growing as R (a
+    geometric shadow; the objects above the grid are a few per cent of the rate).
+
+    Returns a Quantity [1/s]; 1 / mu is the observing time per detected event.
+    """
+    radii = np.asarray(radii_m, dtype=float)
+    width = np.asarray(width_m, dtype=float)
+    order = np.argsort(radii)
+    radii, width = radii[order], width[order]
+    d_break = _as_quantity(diameter_break, u.m, "break diameter").to(u.km).value
+    q_s = float(q_s.value if isinstance(q_s, u.Quantity) else q_s)
+    d_lo, d_hi = 2.0 * radii[0] / 1e3, 2.0 * radii[-1] / 1e3
+    if extrapolate:
+        d_hi = max(d_hi, 1000.0)
+    d = np.geomspace(d_lo, d_hi, n_grid)                          # km
+    r = 0.5 * d * 1e3                                              # m
+    pos = width > 0.0
+    w = np.zeros_like(r)
+    if pos.sum() >= 2:
+        inside = (r >= radii[0]) & (r <= radii[-1])
+        w[inside] = np.exp(np.interp(np.log(r[inside]), np.log(radii[pos]), np.log(width[pos]),
+                                     left=-np.inf, right=-np.inf))
+        if extrapolate:
+            above = r > radii[-1]
+            w[above] = width[-1] * r[above] / radii[-1]
+    # |dSigma/dD| [deg^-2 km^-1]
+    small = Q_1 * d_break ** (q_s - Q_L) * (q_s - 1.0) * d ** (-q_s)
+    large = Q_1 * (Q_L - 1.0) * d ** (-Q_L)
+    dens = np.where(d <= d_break, small, large)
+    integrand = w * dens * d                                       # per d ln D
+    ln_d = np.log(d)
+    integral = float(np.sum(0.5 * (integrand[1:] + integrand[:-1]) * np.diff(ln_d)))   # m deg^-2
+    velocity = _as_quantity(velocity, u.m / u.s, "velocity")
+    distance = _as_quantity(distance, u.m, "KBO distance")
+    return (integral * u.m / u.deg ** 2 * velocity * (180 * u.deg / np.pi / distance) ** 2).to(1 / u.s)
