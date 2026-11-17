@@ -74,11 +74,22 @@ class TargetStar:
 
 
 def generic_targets(mags: Optional[Sequence[float]] = None, ref_mag: float = 7.0,
-                    ref_radius_mas: float = 0.03, temperature_K: float = 10000.0) -> List[TargetStar]:
+                    ref_radius_mas: float = 0.03, temperature_K: float = 10000.0,
+                    prefix: str = "B") -> List[TargetStar]:
     """B = 7 ... 9 (step 0.25) stars whose radius shrinks with magnitude (star_radius_from_mag)."""
     mags = np.arange(7.0, 9.0 + 1e-9, 0.25) if mags is None else mags
-    return [TargetStar(f"B{m:.2f}", float(m), star_radius_from_mag(m, ref_mag, ref_radius_mas), temperature_K)
+    return [TargetStar(f"{prefix}{m:.2f}", float(m), star_radius_from_mag(m, ref_mag, ref_radius_mas), temperature_K)
             for m in mags]
+
+
+def fit_star_relation(targets: Sequence[TargetStar], ref_mag: float = 7.0) -> Tuple[float, float]:
+    """
+    (ref_radius_mas, temperature_K) of the stars: the angular radius at ``ref_mag`` of the fixed-surface-brightness law
+    of ``physics.star_radius_from_mag`` (geometric mean of r * 10^(0.2 (B - ref_mag))) and the median temperature.
+    Feed them to ``generic_targets`` for dummy stars that follow the size-magnitude-temperature of ``targets``.
+    """
+    radius = np.exp(np.mean([np.log(t.angular_radius_mas) + 0.2 * np.log(10.0) * (t.mag_B - ref_mag) for t in targets]))
+    return float(radius), float(np.median([t.temperature_K for t in targets]))
 
 
 CATALOGUE_COLUMNS = {"name": "name", "mag_B": "mag_B", "angular_radius_mas": "angular_radius_mas",
@@ -103,17 +114,30 @@ def parse_column_map(text: Optional[str]) -> Optional[Dict[str, str]]:
 
 def load_target_catalogue(path: str, column_map: Optional[Mapping[str, str]] = None,
                           default_temperature_K: float = 10000.0, ref_mag: float = 7.0,
-                          ref_radius_mas: float = 0.03) -> List[TargetStar]:
+                          ref_radius_mas: float = 0.03, sort_by: Optional[str] = None, top: Optional[int] = None,
+                          exclude: Sequence[str] = ()) -> List[TargetStar]:
     """
     Targets from a CSV. ``column_map`` maps the fields (name, mag_B, angular_radius_mas,
     temperature_K, spectral_type) to the file's column names; absent columns are fine except
     mag_B. A missing radius comes from star_radius_from_mag, a missing temperature from the
     spectral type (physics.teff_from_spectral_type), else ``default_temperature_K``.
+
+    Rows with a missing or non-positive magnitude (0 is a missing-value sentinel) are dropped. ``exclude`` lists names
+    to leave out (whitespace-insensitive, 'HD  40531' = 'HD 40531'); ``sort_by`` (a column, descending) and ``top``
+    keep the first ``top`` of the rest.
     """
     cols = {**CATALOGUE_COLUMNS, **(column_map or {})}
     df = pd.read_csv(path)
     if cols["mag_B"] not in df:
         raise ValueError(f"{path}: no magnitude column {cols['mag_B']!r} (set column_map['mag_B'])")
+    df = df[df[cols["mag_B"]] > 0]
+    if exclude and cols["name"] in df:
+        skip = {" ".join(str(n).split()) for n in exclude}
+        df = df[[" ".join(str(n).split()) not in skip for n in df[cols["name"]]]]
+    if sort_by:
+        df = df.sort_values(sort_by, ascending=False)
+    if top is not None:
+        df = df.head(top)
 
     def value(row, field_name):
         c = cols[field_name]
@@ -128,7 +152,7 @@ def load_target_catalogue(path: str, column_map: Optional[Mapping[str, str]] = N
         if temp is None:
             temp = teff_from_spectral_type(spt) or default_temperature_K
         out.append(TargetStar(
-            str(value(row, "name") or f"star{i}"), mag,
+            " ".join(str(value(row, "name") or f"star{i}").split()), mag,
             float(radius) if radius is not None else star_radius_from_mag(mag, ref_mag, ref_radius_mas),
             float(temp), spt))
     return out

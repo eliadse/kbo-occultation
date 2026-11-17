@@ -39,6 +39,36 @@ def test_catalogue_fills_missing_temperature_and_radius(tmp_path):
         ms.load_target_catalogue(str(path), {"mag_B": "nope"})
 
 
+def test_catalogue_top_by_score_drops_sentinels_and_excluded_names(tmp_path):
+    path = tmp_path / "cat.csv"
+    path.write_text("id,B,score,teff,theta\nHD  1,7.0,0.9,20000,0.03\nHD 2,0,0.95,10000,0.02\n"
+                    "HD 3,8.0,0.8,15000,0.02\nHD 4,8.5,0.7,12000,0.02\nHD 5,9.0,0.99,9000,0.01\n")
+    colmap = {"name": "id", "mag_B": "B", "temperature_K": "teff", "angular_radius_mas": "theta"}
+    out = ms.load_target_catalogue(str(path), colmap, sort_by="score", top=3, exclude=["HD 5"])
+    assert [t.name for t in out] == ["HD 1", "HD 3", "HD 4"]            # B = 0 and excluded rows gone, whitespace normalised
+    assert [t.temperature_K for t in out] == [20000.0, 15000.0, 12000.0]
+    assert len(ms.load_target_catalogue(str(path), colmap)) == 4        # default: all rows with B > 0
+
+
+def test_fit_star_relation_recovers_a_generic_family():
+    stars = ms.generic_targets([7.0, 8.0, 8.7], ref_radius_mas=0.025, temperature_K=14000.0)
+    radius, temp = ms.fit_star_relation(stars)
+    assert radius == pytest.approx(0.025) and temp == 14000.0
+    dummies = ms.generic_targets([7.5], ref_radius_mas=radius, temperature_K=temp, prefix="top5 B")
+    assert dummies[0].name == "top5 B7.50" and dummies[0].temperature_K == 14000.0
+    assert dummies[0].angular_radius_mas == pytest.approx(ms.star_radius_from_mag(7.5, 7.0, 0.025))
+
+
+def test_real_catalogue_top_stars_load():
+    import os
+    path = os.path.join(os.path.dirname(ms.__file__), "..", "data", "Ecliptic_stars_noOutliers_brighter.csv")
+    colmap = ms.parse_column_map("name=MAIN_ID,mag_B=B,angular_radius_mas=ang_radius,temperature_K=teff_gspphot,"
+                                 "spectral_type=SP_TYPE")
+    top = ms.load_target_catalogue(path, colmap, sort_by="score", top=5, exclude=["HD 165132"])
+    assert [t.name for t in top] == ["HD 175754", "HD 220172", "HD 40531", "HD 166832", "HD 51560"]
+    assert all(np.isfinite([t.mag_B, t.angular_radius_mas, t.temperature_K]).all() for t in top)
+
+
 def test_expected_snr_white_noise_is_template_norm_over_sigma():
     _, tmpl = _template()
     sigma = 0.01
