@@ -77,10 +77,11 @@ notebooks/
 | `analysis.bands` | `signal_band`: frequency band of the diffraction signal (f05 … f99, matched-filter band, chord time) |
 | `analysis.spectra`, `analysis.surrogates` | gap-aware Welch PSD, in-band noise, noise seen by a matched filter; Gaussian phase-randomised surrogates |
 | `analysis.mimic` | candidate catalogue, surrogates, false-alarm rates (what `kbo-night mimic` runs) |
-| `analysis.min_size` | smallest detectable KBO radius without injections: expected matched-filter SNR in the measured noise spectrum, thresholds from the real false-alarm rate, 2-of-3 detection probability, R50 vs magnitude / LST focus / catalogue stars |
+| `analysis.min_size` | smallest detectable KBO radius without injections: expected matched-filter SNR in the measured (time-resolved) noise spectrum, thresholds from the real false-alarm rate, k-of-n detection probability, R50 vs magnitude / LST focus / catalogue stars, impact-parameter detection width, calibration against array injections |
+| `analysis.synthetic` | synthetic star runs (white or coloured Gaussian noise at the noise model's level or a given SNR) that stand in for logged runs in `min_size.calibrate_run`: injection, blind search, false-alarm thresholds, efficiency and R50 without real data |
 | `analysis.noise_removal` | efficiency at fixed real-data FAR of each noise-removal method (Butterworth scan, PSD whitening, DC detrend / swap / despike veto) |
 | `analysis.injection`, `analysis.injection_batch` | signal injection / recovery Monte Carlo |
-| `analysis.upper_limits`, `analysis.rates` | detection efficiency → KBO surface-density limits, event rates |
+| `analysis.upper_limits`, `analysis.rates` | detection efficiency → KBO surface-density limits, event rates, observing time per detected event |
 
 The most used names are also importable from the top level
 (`from kbo_occultation import compute_lightcurve, load_observation_log, snr_report, …`).
@@ -522,6 +523,101 @@ Efficiency averaged over the 3 logged nights (0.73 telescope-h, 20 injections pe
 - The old DC swap crossed over at 1 Hz, above the 0.5 Hz DC Nyquist; it is now 0.3 Hz.
 - Caveat: the thresholds (10–24) are set by the largest few of ≈ 0.7 telescope-hours of real
   candidates, so they are noisy; add nights and re-run before changing a default.
+
+---
+
+## Minimum detectable size
+
+What is the smallest KBO that MAGIC-1 + MAGIC-2 + LST-1 can detect? Answered without a new injection per case
+([analysis/min_size.py](kbo_occultation/analysis/min_size.py),
+[examples/studies/min_detectable_size.py](examples/studies/min_detectable_size.py), calibration in
+[examples/studies/min_size_calibration.py](examples/studies/min_size_calibration.py), results in `outputs/min_size/`,
+details and open points in [min-size-plan.md](min-size-plan.md)).
+
+- **R50** is the KBO radius at which the probability of detection is 50 % with ≥ 2 of the 3 telescopes in coincidence at a
+  coincidence false-alarm rate of 1 per hour (0.1 and 0.01 per hour are reported too), for a central chord (b = 0) at 39 AU.
+- The expected matched-filter SNR of the template is computed in the **measured** noise spectrum of the logged star runs
+  (after the noise correction, `whitened` by default), per ~16 s block of the run because the search normalises with a local
+  scatter. The noise is carried to other magnitudes as: model white level of the star + the run's measured excess (red) noise.
+  `theory_only` drops the excess (ideal system).
+- Thresholds come from the real-data candidate lists (`real_candidates.csv`, exponential tail beyond the measured range);
+  the probability of ≥ k of n telescopes above them is a Poisson-binomial.
+- The prediction is calibrated against array injections into the real runs (`SNR_CALIBRATION`: whitened scale 1.07, whitened
+  R50 error 5.5 % on average, worst run +14 %; the run-to-run spread of the scale is reported as a band).
+
+Median R50 [m] over the 7 three-channel runs (range of the runs), measured noise, whitened, FAR 1/h, stars of radius
+0.03 mas · 10^(−0.2 (B − 7)):
+
+| configuration | B = 7 | B = 8 | B = 9 |
+|---|---|---|---|
+| MAGIC-2 | 93 (87–130) | 80 (76–116) | 78 (76–107) |
+| MAGIC-1 | 102 (90–171) | 89 (80–154) | 85 (78–140) |
+| LST-1 | 166 (108–365) | 128 (88–287) | 113 (80–244) |
+| **2 of 3** | **83 (72–135)** | **72 (61–122)** | **67 (58–111)** |
+| 3 of 3 | 91 (65–183) | 74 (55–147) | 64 (53–128) |
+| theory only, 2 of 3 | 42 | 43 | 50 |
+
+- The measured red noise doubles R50 with respect to the photon-noise ideal. In the measured case R50 falls with B (the excess
+  noise does not shrink while the star, and so its smearing of the fringes, does).
+- FAR 0.1 / 0.01 per hour: 2 of 3 gives 92 / 80 / 75 m and 101 / 87 / 83 m.
+- LST-1 at infinity focus (star light × 2) hardly helps: the 2-of-3 R50 is set by the MAGICs. How the excess noise follows a
+  change of the star light is unknown ("star": fixed in star units, "total": fixed in total-signal units); with "total" the 2-of-3
+  R50 at B = 9 is 84 m instead of 67 m, as large as the bank effect below.
+- The b = 0 R50 flatters the cross-section: at R50 the detection width W = 2 ∫ P(R, b) db is ~10 % of the shadow width H(R).
+  `outputs/min_size/observing_time.csv` turns W(R) into observing time per detected event with the size distribution of Nihei et al.
+  (2007): about 150-270 h on one star for the whole distribution (2 of 3, q_s = 4), 335-570 h at best for objects of one size (D ≈ 160-200 m), against
+  a few hours in the shot-noise-only model of `tests/observing_time_vs_kbo_size.py` (overlay with `--width-csv`).
+- The search bank is built for a 0.03 mas star. The table above assumes a bank matched to each target (its own template); with the
+  current bank a smaller star is found with up to 40 % less SNR (B = 7 / 8 / 9: 1 / 24 / 40 %), and the 2-of-3 R50 stays at
+  84 / 83 / 87 m instead of falling to 83 / 72 / 67 m (`outputs/min_size/bank_effect.csv`). A per-star bank is the cheapest gain.
+
+```bash
+python examples/studies/min_size_calibration.py 2025-12-16 2026-03-08 2026-08-19 --min-channels 1   # ~30 min, resumable
+python examples/studies/min_detectable_size.py --check-numerics                                      # ~1 h
+python examples/studies/min_detectable_size.py --catalogue stars.csv --columns name=Name,mag_B=Bmag   # your target stars
+```
+
+```python
+from kbo_occultation.observations.log import load_observation_log
+from kbo_occultation.analysis import min_size as ms
+
+log = load_observation_log()
+cfg = ms.MinSizeConfig().calibrated()                      # whitened, time-resolved noise, FAR 1/h, 2 of 3
+nights = ["2025-12-16", "2026-03-08", "2026-08-19"]
+profiles = ms.load_or_measure_profiles(log, nights, cfg)   # slow the first time: loads the light curves
+curves = ms.rate_curves("outputs/noise_removal/real_candidates.csv", log, ms.csv_method_name(cfg.correction), nights)
+table = ms.min_size_table(ms.generic_targets(), profiles, cfg, curves, focus_gains=(1.0, 2.0))
+ms.summarize(table)
+```
+
+Limitations: the thresholds are extrapolated beyond ≈ 1 telescope-hour of candidates, three nights only (two with three
+channels, short good-time windows), the stars' true radii are assumed (constant surface brightness), and nothing here
+includes weather, airmass or duty cycle.
+
+### Synthetic runs
+
+`examples/studies/synthetic_min_size.py` runs the same chain (inject the star-only event into all three channels, blind search,
+false-alarm thresholds, k-of-n efficiency, R50) on **generated** noise instead of a logged run
+([analysis/synthetic.py](kbo_occultation/analysis/synthetic.py)). `white` is the white level of `Instrument.noise_budget` of the star (in
+the conditions of a reference run, or a given `--snr` per `--snr-dt`); `coloured` adds the measured excess PSD of the reference run,
+which is exactly the noise that the prediction assumes. The noise is Gaussian, stationary and independent between channels, and the
+false-alarm thresholds come from the blind search of the uninjected synthetic runs, so the measured R50 can be set against the
+prediction for a perfectly matched template and for the template bank of the search. A fitted SNR scale of ≈ 1 against the bank
+prediction means the predictor is right for noise that satisfies its assumptions, so the offsets of `SNR_CALIBRATION` come from the
+real (intermittent, non-Gaussian) noise; a different value points at the search itself.
+
+```bash
+python examples/studies/synthetic_min_size.py --noise white coloured --mags 7 9 1 --runs-per-mag 2 --trials 30   # a few hours, resumable
+python examples/studies/synthetic_min_size.py --noise white --snr 10 --snr-dt 0.00524 --default-conditions         # a given SNR per 10 frames
+```
+
+```python
+from kbo_occultation.analysis import min_size as ms, synthetic as sy
+
+cfg = ms.MinSizeConfig(time_resolved=False)
+runs = sy.synthetic_runs([7.0, 8.0, 9.0], cfg, noise="white", n_runs=2, run_s=600)   # [(night, obs, profiles)] as calibration_runs
+# runs feed ms.calibrate_run / ms.predicted_snr like logged runs; obs.lightcurve(ch) is the generated noise
+```
 
 ---
 
