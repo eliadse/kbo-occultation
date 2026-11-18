@@ -297,7 +297,8 @@ made with the **fixed 0.03 mas bank** of the older search, i.e. today's `--fixed
   for thresholds and calibration.
 - `excess_scaling` ("star" vs "total"), needs a focused / defocused LST-1 run, or more nights with a wide range of star fractions.
 - The thresholds are extrapolated beyond the measured tail (about 1 telescope-hour of candidates; 3 nights, only 2 with 3 channels).
-- A catalogue of target stars: `--catalogue` is implemented and tested on synthetic CSVs, not run on a real list.
+- Catalogue of target stars: run on the real catalogue (`examples/studies/catalogue_min_size.py`, top 5 by score without HD 165132, plus dummy
+  stars on the relation fitted to them); see README "Catalogue targets". The remaining caveat is the fixed-bank thresholds/calibration.
 - The detection width neglects the 100 m telescope offsets, the impact parameter b is not varied inside the calibration, and the
   calibration scatter (1.17) is applied to every b.
 - The observing times are per star and per telescope array on-target; no weather, airmass, moon or duty cycle.

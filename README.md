@@ -54,6 +54,7 @@ examples/
   studies/2025_12_16/ archived one-off noise studies of the first night
 notebooks/
   snr_study.ipynb     the SNR study: kbo-night snr's tables plus noise diagnostics
+  synthetic_upper_limits.ipynb   tutorial on synthetic light curves: templates, noise, injections, R50, observing time, upper limits
 ```
 
 | Module | What it is for |
@@ -594,6 +595,34 @@ Limitations: the thresholds are extrapolated beyond ≈ 1 telescope-hour of cand
 channels, short good-time windows), the stars' true radii are assumed (constant surface brightness), and nothing here
 includes weather, airmass or duty cycle.
 
+### Catalogue targets
+
+`examples/studies/catalogue_min_size.py` runs the stars of the observing catalogue
+([data/Ecliptic_stars_noOutliers_brighter.csv](kbo_occultation/data/Ecliptic_stars_noOutliers_brighter.csv): Gaia DR3 + Simbad +
+a detection score) with their own angular radius and temperature, so the template and the photon-budget colour are those of the
+star. Default: the 5 highest `score` stars without HD 165132 (Simbad B 9.11 against Gaia G 8.04, inconsistent with its size),
+plus 11 dummy stars B = 7 ... 9.5 that follow the relation fitted to them (θ = 0.0309 mas · 10^(−0.2 (B − 7)), T = 15 000 K).
+Results are in `outputs/min_size/catalogue/` (`headline.md`, `r50_vs_mag.png`, `r50_vs_size.png`, `bank_check.csv`).
+
+2-of-3 R50 [m], FAR 1/h, measured noise, 'star' excess (run range; 'total' excess in the last column):
+
+| star | B | θ [mas] | R50 | 'total' |
+|---|---|---|---|---|
+| HD 175754 (O8II) | 6.96 | 0.032 | 82 (71-134) | 82 |
+| HD 220172 (B3II) | 7.46 | 0.025 | 78 (67-129) | 81 |
+| HD 40531 (B8) | 7.76 | 0.023 | 76 (65-127) | 81 |
+| HD 51560 (B6V) | 7.85 | 0.024 | 78 (67-129) | 85 |
+| HD 166832 (B3III/IV) | 8.25 | 0.014 | 66 (55-113) | 74 |
+
+The dummy stars give 83 / 72 / 67 m at B = 7 / 8 / 9 (theory only 41 / 43 / 49), the same as the generic stars, and the real stars
+sit on that curve: R50 is set by the magnitude and size, the temperature changes it little. The 4-template search bank keeps
+≥ 98 % of the SNR of a perfect template at R50 for these stars. The same caveats as above apply (fixed-bank thresholds and
+calibration, three nights).
+
+```bash
+python examples/studies/catalogue_min_size.py        # several hours; --mags 7 9 1 --radii 10 1000 15 --fars 1 for a smoke test
+```
+
 ### Synthetic runs
 
 `examples/studies/synthetic_min_size.py` runs the same chain (inject the star-only event into all three channels, blind search,
@@ -639,6 +668,12 @@ light curves and running the same search on them:
   the TAOS-style upper limit on the cumulative KBO surface density.
   [real_data/array_mc_benchmark.py](examples/real_data/array_mc_benchmark.py) runs
   the whole chain.
+
+[notebooks/synthetic_upper_limits.ipynb](notebooks/synthetic_upper_limits.ipynb) walks through the whole chain on
+**synthetic** light curves, with plots at each step: templates, noise (white and measured-excess), the matched-filter search,
+false-alarm thresholds, injection / recovery, the minimum detectable size and what changes it, observing hours per
+detected event and the upper limits on the surface density, against the literature. It runs without observation data
+(coloured noise needs the noise profiles of `outputs/min_size/`, measured from the logged runs when missing).
 
 All real-data examples choose their input with `NIGHT, OBSERVATION = …` at the top
 and `load_observation_log().get(NIGHT, OBSERVATION)`. They write to `outputs/`.
