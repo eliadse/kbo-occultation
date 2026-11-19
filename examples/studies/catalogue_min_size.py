@@ -227,7 +227,7 @@ for star in real:
     if not np.isfinite(r50_star):
         continue
     cfg_b = replace(cfg, radii_m=np.array([r50_star]))
-    bank = ms.bank_residuals(cfg_b, star=star)
+    bank = ms.bank_deltas(cfg_b, star=star)
     for p in first_run:
         kind = "LST" if p.telescope.startswith("LST") else "MAGIC"
         tpl = ms.template_family(star, cfg_b, instruments[kind])[float(r50_star)]

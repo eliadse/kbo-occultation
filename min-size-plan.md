@@ -217,7 +217,7 @@ Built: `examples/studies/min_detectable_size.py` (see its docstring; smoke test 
 `r50_vs_mag.png`, `r50_lst_focus.png`, `efficiency_curves.png`, `observing_time.png`).
 
 Library: `min_size.min_size_table` (`excess_scalings=`, `scale_band=`, `return_efficiency=`; `scale_quantiles`),
-`expected_snr(signal=)` / `bank_snr` / `bank_residuals` (mismatched events and the real 4-template bank),
+`expected_snr(signal=)` / `bank_snr` / `bank_deltas` (mismatched events and the real 4-template bank),
 `snr_evaluator`, `array_threshold`, `parse_column_map`, `load_or_measure_profiles`, and the impact-parameter section
 (`shadow_width_m`, `impact_nodes`, `width_signals`, `detection_width`); `rates.observing_time_per_size`,
 `rates.detected_event_rate`; `upper_limits.EfficiencyCurve(clip=False)`; `tests/observing_time_vs_kbo_size.py --width-csv`
@@ -270,7 +270,7 @@ made with the **fixed 0.03 mas bank** of the older search, i.e. today's `--fixed
 
 - The search normalisation is right on this noise: full-run SNR-trace std 0.98-1.01 in every channel.
 - Measured / predicted peak SNR against the **perfectly matched** template: 0.84 (white), 0.67-0.79 (coloured); against the **fixed 0.03 mas search bank**
-  (`predicted_snr(bank=bank_residuals(cfg))`): 0.99-1.05 (white) and 0.99-1.00 (coloured), run-channel range 0.95-1.09. The likelihood fit on the 2-of-3
+  (`predicted_snr(bank=bank_deltas(cfg))`): 0.99-1.05 (white) and 0.99-1.00 (coloured), run-channel range 0.95-1.09. The likelihood fit on the 2-of-3
   detections gives 1.15 / 1.08 (white / coloured; few trials). So for stationary Gaussian noise the predictor, with the bank's template mismatch, is
   right to a few percent; the 0.91 of `SNR_CALIBRATION_STATIONARY` (0.03 mas stars, bank matched) and the 1.07 of the time-resolved one come from the real
   noise (intermittent, non-Gaussian), not from the search.

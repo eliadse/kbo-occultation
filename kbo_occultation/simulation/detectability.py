@@ -225,9 +225,9 @@ def matched_filter_snr(intensity: np.ndarray, sigma: float, template: Optional[n
     """
     #TODO revise if this is what causes so many false positives with the same SNR shape
     ref = np.asarray(intensity if template is None else template)
-    residual = ref - 1.0
+    delta = ref - 1.0
 
-    return float(np.sqrt(np.sum(residual**2)) / sigma)
+    return float(np.sqrt(np.sum(delta**2)) / sigma)
 
 
 def event_duration(x_m: np.ndarray, intensity: np.ndarray, threshold: float = 0.5) -> float:

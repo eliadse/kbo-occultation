@@ -195,8 +195,8 @@ def predicted_with_bank():
         obs = run[1]
         size = round(observed_star_mas(obs), 6)
         if size not in banks:
-            banks[size] = ms.bank_residuals(cfg) if args.fixed_bank else \
-                ms.bank_residuals(cfg, star=ms.observed_target(obs, observed_star_mas(obs)))
+            banks[size] = ms.bank_deltas(cfg) if args.fixed_bank else \
+                ms.bank_deltas(cfg, star=ms.observed_target(obs, observed_star_mas(obs)))
         parts.append(ms.predicted_snr([run], cfg, args.corrections, radii, bank=banks[size]))
     return cat(parts)
 

@@ -139,7 +139,7 @@ def test_end_to_end_peak_snr_matches_the_search_bank_prediction(cfg):
     assert np.all(np.abs(calib["snr_std"] - 1.0) < 0.15)                      # empirical normalisation on white noise
     from kbo_occultation.analysis.mimic import observed_star_mas
 
-    own_bank = ms.bank_residuals(cfg, star=ms.observed_target(obs, observed_star_mas(obs)))   # calibrate_run's default bank
+    own_bank = ms.bank_deltas(cfg, star=ms.observed_target(obs, observed_star_mas(obs)))   # calibrate_run's default bank
     pred = ms.predicted_snr(runs, cfg, ["whitened"], radii, bank=own_bank)
     got = trials.groupby(["channel", "radius_m"])["peak_snr"].median()
     for row in pred.itertuples():

@@ -85,7 +85,7 @@ def test_spectral_matched_filter_sigma_matches_empirical():
     tt, ti = _template()
     res = sliding_matched_filter_snr(t, 1.0 + noise, tt, ti, normalization="empirical")
     f, p = segmented_welch(t, res.residual_data, 1 / DT, 2 ** 13)
-    sigma_psd = matched_filter_sigma(f, p, res.residual_template, 1 / DT)
+    sigma_psd = matched_filter_sigma(f, p, res.template_delta, 1 / DT)
     amp = res.snr * res.amp_sigma                 # filter output, flux units
     sigma_emp = float(np.std(amp[200:-200]))
     assert sigma_psd == pytest.approx(sigma_emp, rel=0.10)

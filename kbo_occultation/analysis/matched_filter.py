@@ -36,7 +36,7 @@ class MatchedFilterResult:
     # detrending/resampling step.
     data_time: np.ndarray
     residual_data: np.ndarray
-    residual_template: np.ndarray
+    template_delta: np.ndarray
     # Per-lag noise of the filter output in flux units, i.e. the white
     # per-sample sigma that would give the same SNR (snr = corr /
     # template_norm / amp_sigma), aligned with `time`. For
@@ -278,12 +278,12 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         baseline, sigma = compute_baseline_and_sigma(time, signal, template_duration_s, detrend_window_s)
     norm_signal = signal / baseline
 
-    # --- matched filter: FFT cross-correlation of the residuals ---
+    # --- matched filter: FFT cross-correlation of the detrended data with the template variation ---
     residual_data = norm_signal - 1.0
-    residual_template = template_resampled - 1.0
-    template_norm = float(np.sqrt(np.sum(residual_template**2)))
+    template_delta = template_resampled - 1.0
+    template_norm = float(np.sqrt(np.sum(template_delta**2)))
 
-    correlation = correlate(residual_data, residual_template, mode="valid", method="fft")
+    correlation = correlate(residual_data, template_delta, mode="valid", method="fft")
 
     # correlation[i] is the match for the window signal[i:i+M]; tag it
     # at that window's center time. sigma varies slowly (block/window
@@ -319,7 +319,7 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         template_duration_s=template_duration_s,
         data_time=time,
         residual_data=residual_data,
-        residual_template=residual_template,
+        template_delta=template_delta,
         amp_sigma=amp_sigma,
         template_norm=template_norm,
         normalization=normalization,
@@ -366,15 +366,15 @@ def shape_veto_chi2(result: MatchedFilterResult, candidate_time_s: float,
     float
         chi2 / dof, dof = (number of samples in the template window - 1).
     """
-    M = len(result.residual_template)
+    M = len(result.template_delta)
     center_idx = int(np.searchsorted(result.data_time, candidate_time_s))
     start = max(0, min(center_idx - M // 2, len(result.residual_data) - M))
     window = result.residual_data[start:start + M]
 
-    template_norm_sq = float(np.sum(result.residual_template**2))
-    amplitude = float(np.sum(window * result.residual_template) / template_norm_sq)
+    template_norm_sq = float(np.sum(result.template_delta**2))
+    amplitude = float(np.sum(window * result.template_delta) / template_norm_sq)
 
-    residuals = window - amplitude * result.residual_template
+    residuals = window - amplitude * result.template_delta
     if weighting == "empirical":
         if result.amp_sigma is None:
             raise ValueError("result carries no amp_sigma; recompute with sliding_matched_filter_snr")

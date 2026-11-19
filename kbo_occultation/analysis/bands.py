@@ -89,10 +89,10 @@ SIGNAL_BAND_HZ = (0.2, 25.0)
 
 
 @lru_cache(maxsize=8)
-def default_template_residual(dt_s: float, radius_m: float = 100.0, star_mas: float = 0.03,
-                              distance_au: float = 40.0, v_mps: float = 25e3) -> np.ndarray:
+def default_template_delta(dt_s: float, radius_m: float = 100.0, star_mas: float = 0.03,
+                           distance_au: float = 40.0, v_mps: float = 25e3) -> np.ndarray:
     """
-    Reference template (I - 1) sampled at ``dt_s``: a 100 m KBO at 40 AU
+    Signal variation dI = I - 1 of the reference template, sampled at ``dt_s``: a 100 m KBO at 40 AU
     crossing a 0.03 mas star at 25 km/s, b = 0, in the 320-450 nm band.
     Light-weight numerics (the shape only sets the weighting of the noise
     PSD). Cached per ``dt_s``.

@@ -139,7 +139,7 @@ def inband_rms(lc, band: Tuple[float, float], nperseg_target: int = SEGMENT_SAMP
     return (rms, info) if return_info else rms
 
 
-def matched_filter_sigma(freq: np.ndarray, psd: np.ndarray, template_residual: np.ndarray,
+def matched_filter_sigma(freq: np.ndarray, psd: np.ndarray, template_delta: np.ndarray,
                          fs: float) -> float:
     """
     Noise seen by a matched filter: sqrt( int |T|^2 S df / int |T|^2 df ).
@@ -148,23 +148,23 @@ def matched_filter_sigma(freq: np.ndarray, psd: np.ndarray, template_residual: n
     ----------
     freq, psd : the PSD (one-sided, fractional-flux^2 / Hz) on the grid of
         ``segmented_welch`` (spacing fs / nperseg).
-    template_residual : template - 1, sampled at 1 / fs.
+    template_delta : signal variation of the template, template - 1, sampled at 1 / fs.
 
     Same units as the per-sample sigma that gives the same SNR for the
     unit-norm filter (matched_filter.MatchedFilterResult.amp_sigma). For
     white noise of per-sample sigma s, S = 2 s^2 / fs and the result is s.
     """
     n_fft = 2 * (len(freq) - 1)
-    T = np.fft.rfft(np.asarray(template_residual, dtype=float), n=n_fft)
+    T = np.fft.rfft(np.asarray(template_delta, dtype=float), n=n_fft)
     w = np.abs(T) ** 2
     return float(np.sqrt(np.sum(w * psd) * (fs / 2.0) / np.sum(w)))
 
 
-def noise_band_numbers(lc, band: Tuple[float, float], template_residual: Optional[np.ndarray] = None,
+def noise_band_numbers(lc, band: Tuple[float, float], template_delta: Optional[np.ndarray] = None,
                        nperseg_target: int = SEGMENT_SAMPLES) -> Dict[str, float]:
     """
     One Welch estimate -> {"inband_rms", "welch_short"} and, when a template
-    residual (template - 1, sampled at lc.dt) is given, "mf_sigma". All in
+    variation (template - 1, sampled at lc.dt) is given, "mf_sigma". All in
     fractional-flux units; "welch_short" is 1.0 when some run was too short
     for ``nperseg_target`` (coarser frequency resolution than intended).
     """
@@ -172,6 +172,6 @@ def noise_band_numbers(lc, band: Tuple[float, float], template_residual: Optiona
     sel = (f >= band[0]) & (f <= band[1])
     out = {"inband_rms": float(np.sqrt(_trapz(psd[sel], f[sel]))) if sel.sum() > 1 else float("nan"),
            "welch_short": float(info["short"])}
-    if template_residual is not None:
-        out["mf_sigma"] = matched_filter_sigma(f, psd, template_residual, 1.0 / lc.dt)
+    if template_delta is not None:
+        out["mf_sigma"] = matched_filter_sigma(f, psd, template_delta, 1.0 / lc.dt)
     return out

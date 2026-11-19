@@ -286,7 +286,7 @@ if args.check_numerics:
     cfg_n = replace(cfg, radii_m=np.geomspace(max(radii[0], 20.0), radii[-1], 8))
     group0 = next(iter(groups.values()))
     instruments = {kind: Instrument(kind, filter_type=cfg.filter_type, site="LaPalma") for kind in ("MAGIC", "LST")}
-    bank = ms.bank_residuals(cfg_n)
+    bank = ms.bank_deltas(cfg_n)
     rows = []
     for mag in (7.0, 9.0):
         star = ms.generic_targets([mag])[0]
@@ -302,7 +302,7 @@ if args.check_numerics:
                 a, b = (np.nanmedian(v, axis=0) if v.ndim == 2 else v for v in (a, b))
                 rows += [{"check": name, "mag_B": mag, "telescope": p.telescope, "radius_m": r, "a": x, "b": y,
                           "rel_diff": y / x - 1.0} for r, x, y in zip(cfg_n.radii_m, a, b)]
-        bank_star = ms.bank_residuals(cfg_n, star=star)         # the 4-template bank of this star's own size
+        bank_star = ms.bank_deltas(cfg_n, star=star)         # the 4-template bank of this star's own size
         for p in group0:                                       # the 4-template banks against a perfect template
             kind = "LST" if p.telescope.startswith("LST") else "MAGIC"
             f_noise = ms.noise_psd(p, star, cfg_n)

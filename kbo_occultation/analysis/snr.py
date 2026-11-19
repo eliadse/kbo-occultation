@@ -52,7 +52,7 @@ from ..observations.cc_reports import conditions_table
 from ..observations.dc_combine import (combine_lightcurve_with_dc, despike_lightcurve_with_dc,
                                        detrend_lightcurve_with_dc)
 from ..observations.photometry import LightCurve, good_time_lightcurve
-from .bands import SIGNAL_BAND_HZ, default_template_residual
+from .bands import SIGNAL_BAND_HZ, default_template_delta
 from .spectra import noise_band_numbers
 from .snr_measurement import (dc_to_fast_scale, detrended_snr, gaussian_histogram_peak, histogram_peak, measured_snr,
                               nsb_from_dark, nsb_from_dc_background, nsb_from_dc_histogram,
@@ -218,7 +218,7 @@ def measured_snr_table(log, nights=None, n_bins: Sequence[int] = N_BINS, nsb: Op
                 nsb0 = n["nsb_default_fast"]
                 nsb_err = n["nsb_default_err_fast"]
                 try:
-                    band_noise = noise_band_numbers(lc, signal_band_hz, default_template_residual(round(lc.dt, 9)))
+                    band_noise = noise_band_numbers(lc, signal_band_hz, default_template_delta(round(lc.dt, 9)))
                 except ValueError:       # no run long enough for a Welch estimate
                     band_noise = {"inband_rms": np.nan, "welch_short": np.nan, "mf_sigma": np.nan}
                 for n_bin in n_bins:

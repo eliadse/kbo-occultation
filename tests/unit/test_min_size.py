@@ -604,7 +604,7 @@ def test_the_star_matched_bank_keeps_the_snr_that_the_fixed_bank_loses():
     f = _grid()
     white = np.full_like(f, 2 * 0.01 ** 2 / FS)
     perfect = ms.expected_snr(template, f, white, FS)
-    matched = ms.bank_snr(template, ms.bank_residuals(cfg, star=star), f, white, FS)
-    fixed = ms.bank_snr(template, ms.bank_residuals(cfg), f, white, FS)
+    matched = ms.bank_snr(template, ms.bank_deltas(cfg, star=star), f, white, FS)
+    fixed = ms.bank_snr(template, ms.bank_deltas(cfg), f, white, FS)
     assert matched > 0.95 * perfect                                                   # 4 radii and the band cost a few %
     assert fixed < 0.8 * perfect                                                      # the 0.03 mas bank loses ~40 %

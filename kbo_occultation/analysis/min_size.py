@@ -245,8 +245,8 @@ def _fine_time(cfg: MinSizeConfig) -> np.ndarray:
     return t_fine[:len(t_fine) // cfg.bin_samples * cfg.bin_samples]
 
 
-def _binned_residual(t_axis_s: np.ndarray, intensity: np.ndarray, t_fine: np.ndarray, cfg: MinSizeConfig) -> np.ndarray:
-    """I - 1 of a pattern (time axis ``t_axis_s``) at the bin cadence on the span of ``t_fine``."""
+def _binned_delta(t_axis_s: np.ndarray, intensity: np.ndarray, t_fine: np.ndarray, cfg: MinSizeConfig) -> np.ndarray:
+    """Signal variation I - 1 of a pattern (time axis ``t_axis_s``) at the bin cadence on the span of ``t_fine``."""
     fine = np.interp(t_fine, t_axis_s, intensity)
     return fine.reshape(-1, cfg.bin_samples).mean(axis=1) - 1.0
 
@@ -258,11 +258,11 @@ def template_family(star: TargetStar, cfg: MinSizeConfig, instrument) -> Dict[fl
     """
     v = cfg.velocity_mps()
     t_fine = _fine_time(cfg)
-    return {radius: _binned_residual(x_m / v, intensity, t_fine, cfg)
+    return {radius: _binned_delta(x_m / v, intensity, t_fine, cfg)
             for radius, (x_m, intensity) in injection_patterns(star, cfg, instrument).items()}
 
 
-def bank_residuals(cfg: MinSizeConfig, mimic_cfg=None, star: Optional[TargetStar] = None) -> Dict[float, np.ndarray]:
+def bank_deltas(cfg: MinSizeConfig, mimic_cfg=None, star: Optional[TargetStar] = None) -> Dict[float, np.ndarray]:
     """
     {radius_m: I - 1} of the templates of the real search (``mimic.search_templates``: the star through the
     320-450 nm band, at the shadow velocity of the search) at the bin cadence of ``template_family``. The star is the
@@ -277,7 +277,7 @@ def bank_residuals(cfg: MinSizeConfig, mimic_cfg=None, star: Optional[TargetStar
     t_fine = _fine_time(cfg)
     templates = (search_templates(mimic_cfg, v_bank) if star is None else
                  search_templates(mimic_cfg, v_bank, star.angular_radius_mas, star.temperature_K))
-    return {radius: _binned_residual(t, intensity, t_fine, cfg) for radius, (t, intensity) in templates.items()}
+    return {radius: _binned_delta(t, intensity, t_fine, cfg) for radius, (t, intensity) in templates.items()}
 
 
 # ───────────────────────────── noise profiles ───────────────────────────────
@@ -512,7 +512,7 @@ def correction_gain(name: str, freq: np.ndarray, psd: np.ndarray, fs: float) -> 
     raise ValueError(f"unknown correction {name!r}")
 
 
-def expected_snr(template_residual: np.ndarray, freq: np.ndarray, psd: np.ndarray, fs: float,
+def expected_snr(template_delta: np.ndarray, freq: np.ndarray, psd: np.ndarray, fs: float,
                  gain: Optional[np.ndarray] = None, signal: Optional[np.ndarray] = None) -> float:
     """
     Expected matched-filter SNR of the template (I - 1, sampled at 1 / fs) in the noise PSD ``psd``
@@ -525,7 +525,7 @@ def expected_snr(template_residual: np.ndarray, freq: np.ndarray, psd: np.ndarra
     signal equal to the template gives the matched value and any other of the same norm less.
     """
     n_fft = 2 * (len(freq) - 1)
-    t = np.asarray(template_residual, dtype=float)
+    t = np.asarray(template_delta, dtype=float)
     if len(t) > n_fft:
         raise ValueError(f"template ({len(t)} samples) longer than the PSD's FFT ({n_fft})")
     g = np.ones_like(freq) if gain is None else np.asarray(gain, float)
@@ -979,7 +979,7 @@ def width_signals(star: TargetStar, cfg: MinSizeConfig, instrument, radii: Optio
         rows = []
         for b in nodes[r]:
             x_m, intensity = wide.compute(KBOConfig(r, cfg.distance_au, float(b)), star.angular_radius_mas)
-            rows.append(_binned_residual(x_m / v, intensity, t_fine, cfg))
+            rows.append(_binned_delta(x_m / v, intensity, t_fine, cfg))
         out[r] = (nodes[r], np.array(rows))
     return out
 
@@ -1304,7 +1304,7 @@ def predicted_snr(runs, cfg: MinSizeConfig, corrections: Sequence[str],
     radius_m, snr_pred, block. ``runs``: ``calibration_runs``. ``block`` is 0 for a stationary prediction;
     with ``cfg.time_resolved`` (and block PSDs in the profiles) every time block is a row (NaN where unusable).
 
-    ``bank`` ({radius: I - 1} at the bin cadence, e.g. ``bank_residuals``): the event of each radius is searched
+    ``bank`` ({radius: I - 1} at the bin cadence, e.g. ``bank_deltas``): the event of each radius is searched
     with the best template of the bank (``bank_snr``), as the real search does, instead of its own (perfectly
     matched) template.
     """

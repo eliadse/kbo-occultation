@@ -198,7 +198,7 @@ def search_lightcurve(lc: LightCurve, templates, snr_threshold: float,
                 if not mf.snr[i] <= peak["peak_snr"]:          # also true while peak_snr is nan
                     peak = {"peak_snr": float(mf.snr[i]), "peak_time": float(mf.time[i]),
                             "peak_radius_m": float(radius)}
-        peak_amp = float(np.max(np.abs(mf.residual_template)))
+        peak_amp = float(np.max(np.abs(mf.template_delta)))
         for cand in find_candidates(mf, snr_threshold=snr_threshold, chi2_weighting="empirical"):
             lag = int(np.searchsorted(mf.time, cand.time_s))
             lag = min(lag, len(mf.amp_sigma) - 1)
