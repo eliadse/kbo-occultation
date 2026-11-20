@@ -608,3 +608,124 @@ def test_the_star_matched_bank_keeps_the_snr_that_the_fixed_bank_loses():
     fixed = ms.bank_snr(template, ms.bank_deltas(cfg), f, white, FS)
     assert matched > 0.95 * perfect                                                   # 4 radii and the band cost a few %
     assert fixed < 0.8 * perfect                                                      # the 0.03 mas bank loses ~40 %
+
+
+def test_band_response_reproduces_the_trapezoid_bank_and_telescope_response_differs():
+    from kbo_occultation.analysis.mimic import MimicConfig, search_templates
+
+    v = 25000.0
+    kw = dict(template_radii_m=(100.0,), star_mas=0.012)
+    band = search_templates(MimicConfig(response="band", **kw), v)[100.0][1]
+    tel = search_templates(MimicConfig(**kw), v)[100.0][1]
+    assert MimicConfig().response == "telescope"
+    assert np.abs(band - tel).max() > 1e-3                                            # another band, another fringe pattern
+    with pytest.raises(ValueError):
+        search_templates(MimicConfig(response="nope", **kw), v)
+
+
+def test_star_bank_is_shared_by_telescopes_with_the_same_response_and_split_by_filter():
+    from kbo_occultation.analysis.mimic import MimicConfig, bank_instrument, star_bank
+
+    cfg = MimicConfig(template_radii_m=(100.0,))
+    v = 25000.0
+    magic, lst = bank_instrument("MAGIC-1"), bank_instrument("LST-1")
+    assert magic is not lst and magic is bank_instrument("MAGIC-2")                   # one Instrument per kind
+    assert star_bank(cfg, _Obs(9.0), v, magic) is star_bank(cfg, _Obs(9.0), v, lst)   # same response curve, one bank
+    filtered = star_bank(cfg, _Obs(9.0), v, bank_instrument("MAGIC-1", "bessell_B"))
+    assert filtered is not star_bank(cfg, _Obs(9.0), v, magic)
+    assert star_bank(cfg, _Obs(9.0), v, magic) is not star_bank(MimicConfig(template_radii_m=(100.0,), response="band"),
+                                                                _Obs(9.0), v)
+
+
+def test_the_bank_agrees_with_the_injected_pattern_when_star_and_radius_match():
+    from kbo_occultation.simulation.instruments import Instrument
+
+    star = ms.TargetStar("B9", 9.0, ms.star_radius_from_mag(9.0))
+    cfg = ms.MinSizeConfig(radii_m=np.array([100.0]))                                 # the search's own numerics
+    template = ms.template_family(star, cfg, Instrument("MAGIC", site="LaPalma"))[100.0]
+    f = _grid()
+    white = np.full_like(f, 2 * 0.01 ** 2 / FS)
+    from kbo_occultation.analysis.mimic import MimicConfig
+    bank = ms.bank_deltas(cfg, MimicConfig(template_radii_m=(100.0,)), star=star)
+    kept = ms.bank_snr(template, bank, f, white, FS) / ms.expected_snr(template, f, white, FS)
+    assert kept > 0.999                                                               # was 0.97 with the 320-450 nm band
+
+
+def test_the_bank_at_the_injection_radii_is_the_matched_template():
+    from kbo_occultation.analysis.mimic import MimicConfig
+    from kbo_occultation.simulation.instruments import Instrument
+
+    star = ms.TargetStar("B9", 9.0, ms.star_radius_from_mag(9.0))
+    radii = (60.0, 150.0)
+    cfg = ms.MinSizeConfig(radii_m=np.array(radii))
+    family = ms.template_family(star, cfg, Instrument("MAGIC", site="LaPalma"))
+    bank = ms.bank_deltas(cfg, MimicConfig(template_radii_m=radii), star=star)
+    f = _grid()
+    white = np.full_like(f, 2 * 0.01 ** 2 / FS)
+    for r in radii:                                         # the template of R alone, as the matched search uses it
+        kept = ms.expected_snr(bank[r], f, white, FS, signal=family[r]) / ms.expected_snr(family[r], f, white, FS)
+        assert kept > 0.999
+
+
+def test_detection_probability_accepts_a_threshold_per_radius():
+    snr = {"A": np.array([4.0, 6.0, 8.0]), "B": np.array([5.0, 6.5, 7.0])}
+    thr = np.array([5.0, 5.0, 7.0])
+    for k in (1, 2):
+        got = ms.detection_probability(snr, thr, k, 1.2)
+        want = [ms.detection_probability({t: v[i:i + 1] for t, v in snr.items()}, thr[i], k, 1.2)[0] for i in range(3)]
+        np.testing.assert_allclose(got, want)
+
+
+def test_array_threshold_by_radius_interpolates_in_log_radius_and_is_flat_outside():
+    rng = np.random.default_rng(0)
+    low = {"A": ms.RateCurve(3.0 + rng.exponential(0.5, 60), 1.0)}
+    high = {"A": ms.RateCurve(3.0 + rng.exponential(0.5, 600), 1.0)}               # 10 x the rate: a higher threshold
+    curves = {50.0: low, 100.0: high}
+    t50, t100 = (ms.array_threshold(c, ["A"], 1, 1.0, 0.4)[0] for c in curves.values())
+    assert t100 > t50
+    got = ms.array_threshold_by_radius(curves, ["A"], 1, 1.0, 0.4, [20.0, 50.0, np.sqrt(5000.0), 100.0, 500.0])
+    np.testing.assert_allclose(got, [t50, t50, 0.5 * (t50 + t100), t100, t100])
+
+
+def test_efficiencies_take_a_threshold_per_radius():
+    import pandas as pd
+    from scipy.special import ndtr
+
+    # predicted: A has threshold 3 at 50 m and 7 at 100 m; B is the same everywhere
+    radii = [50.0, float(np.sqrt(5000.0)), 100.0]
+    snr = pd.DataFrame([{"night": "n", "observation": "o", "correction": "raw", "channel": ch, "telescope": ch,
+                         "radius_m": r, "snr_pred": s} for ch in "AB" for r, s in zip(radii, (4.0, 5.0, 6.0))])
+    table = pd.DataFrame([{"far_per_hr": 1.0, "config": c, "radius_m": r, "threshold": t}
+                          for c, ts in (("A", (3.0, 7.0)), ("B", (5.0, 5.0)), ("2of2", (4.0, 4.0)))
+                          for r, t in zip((50.0, 100.0), ts)])
+    pred = ms.predicted_efficiency(snr, table).set_index(["config", "radius_m"])["eff_pred"]
+    assert pred[("A", radii[1])] == pytest.approx(ndtr(5.0 - 5.0))                      # threshold 5 at the geometric mean
+    assert pred[("A", 50.0)] == pytest.approx(ndtr(4.0 - 3.0))
+    assert pred[("B", 100.0)] == pytest.approx(ndtr(6.0 - 5.0))
+    flat = ms.predicted_efficiency(snr, table[table["config"] == "B"].drop(columns="radius_m").drop_duplicates(["config"]))
+    np.testing.assert_allclose(pred[("B", 50.0)], flat.set_index(["config", "radius_m"])["eff_pred"][("B", 50.0)])
+
+    # measured: one candidate of SNR 6 at each radius; it is above the threshold of 50 m (5) and below that of 100 m (7)
+    run = dict(night="n", observation="o", correction="raw", sf_mode="measured")
+    trials = pd.DataFrame([{**run, "radius_m": r, "trial": 0, "t0_s": 10.0, "channel": "A"} for r in (50.0, 100.0)])
+    cands = pd.DataFrame([{**run, "radius_m": r, "trial": 0, "channel": "A", "snr": 6.0, "time_s": 10.0,
+                           "chi2_reduced": 1.0} for r in (50.0, 100.0)])
+    thr = pd.DataFrame([{"far_per_hr": 1.0, "config": "A", "radius_m": r, "threshold": t} for r, t in ((50.0, 5.0), (100.0, 7.0))])
+    eff = ms.measured_efficiency(trials, cands, thr, 0.4).set_index("radius_m")
+    assert eff.loc[50.0, "hits"] == 1 and eff.loc[100.0, "hits"] == 0
+    assert eff.loc[100.0, "threshold"] == 7.0
+
+
+def test_centred_detection_width_is_the_shadow_width_times_the_central_probability():
+    star = ms.TargetStar("s", 8.0, 0.03)
+    cfg = _small_cfg(radii=(30.0,))
+    group = [_profile("MAGIC-2", "A")]
+    templates, signals, b = _fake_width_inputs(lambda x: 1.0 if x <= 3.0 else 0.0)
+    full = ms.detection_width(star, group, cfg, templates, signals, k=1, threshold=6.0)
+    centred = ms.detection_width(star, group, cfg, templates, None, k=1, threshold=6.0, centred=True)   # no b > 0 signals
+    h = float(ms.shadow_width_m(30.0, star, cfg))
+    assert centred["p_b0"].iloc[0] == pytest.approx(full["p_b0"].iloc[0]) == pytest.approx(1.0)
+    assert centred["width_m"].iloc[0] == pytest.approx(h) and centred["eff_eff"].iloc[0] == pytest.approx(1.0)
+    assert np.isnan(centred["p_tail"].iloc[0])
+    undetected = ms.detection_width(star, group, cfg, templates, None, k=1, threshold={30.0: 1e6}, centred=True)
+    assert undetected["width_m"].iloc[0] == pytest.approx(0.0, abs=1e-9)                # a threshold per radius

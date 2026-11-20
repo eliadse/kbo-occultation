@@ -15,7 +15,7 @@ so both are run.
 
 Besides R50 the detection width W(R) = 2 * integral of the detection probability over the impact parameter b is
 computed (``min_size.detection_width``) and turned into the observing time per detected event with the size
-distribution of Nihei et al. 2007 (``rates.observing_time_per_size``, ``rates.detected_event_rate``).
+distribution of Bickerton et al. 2009 (``rates.observing_time_per_size``, ``rates.detected_event_rate``).
 
 Usage:
     python examples/studies/min_detectable_size.py [NIGHT ...] [--min-channels 3] [--fars 1 0.1 0.01]

@@ -262,21 +262,24 @@ def template_family(star: TargetStar, cfg: MinSizeConfig, instrument) -> Dict[fl
             for radius, (x_m, intensity) in injection_patterns(star, cfg, instrument).items()}
 
 
-def bank_deltas(cfg: MinSizeConfig, mimic_cfg=None, star: Optional[TargetStar] = None) -> Dict[float, np.ndarray]:
+def bank_deltas(cfg: MinSizeConfig, mimic_cfg=None, star: Optional[TargetStar] = None,
+                telescope: str = "MAGIC") -> Dict[float, np.ndarray]:
     """
-    {radius_m: I - 1} of the templates of the real search (``mimic.search_templates``: the star through the
-    320-450 nm band, at the shadow velocity of the search) at the bin cadence of ``template_family``. The star is the
-    fixed 0.03 mas one of ``mimic_cfg`` unless ``star`` is given: the bank of that star (size and temperature), as
-    ``mimic.star_bank`` builds it for an observed one.
+    {radius_m: I - 1} of the templates of the real search (``mimic.search_templates``: the star through the response
+    of ``telescope`` and ``cfg.filter_type``, at the shadow velocity of the search) at the bin cadence of
+    ``template_family``. The star is the fixed 0.03 mas one of ``mimic_cfg`` unless ``star`` is given: the bank of that
+    star (size and temperature), as ``mimic.star_bank`` builds it for an observed one. MAGIC and LST-1 have the same
+    response today, so one bank serves both.
     """
     from ..simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU
-    from .mimic import MimicConfig, search_templates
+    from .mimic import MimicConfig, bank_instrument, search_templates
 
     mimic_cfg = mimic_cfg or MimicConfig()
     v_bank = shadow_velocity_opposition(mimic_cfg.distance_au + EARTH_SEMIMAJOR_AXIS_AU)
     t_fine = _fine_time(cfg)
-    templates = (search_templates(mimic_cfg, v_bank) if star is None else
-                 search_templates(mimic_cfg, v_bank, star.angular_radius_mas, star.temperature_K))
+    instrument = bank_instrument(telescope, cfg.filter_type)
+    templates = (search_templates(mimic_cfg, v_bank, instrument=instrument) if star is None else
+                 search_templates(mimic_cfg, v_bank, star.angular_radius_mas, star.temperature_K, instrument))
     return {radius: _binned_delta(t, intensity, t_fine, cfg) for radius, (t, intensity) in templates.items()}
 
 
@@ -755,6 +758,18 @@ def array_threshold(curves: Mapping[str, RateCurve], channels: Sequence[str], k:
     return coincidence_threshold(sub, tolerance_s, far_per_hr, k)
 
 
+def array_threshold_by_radius(curves_by_radius: Mapping[float, Mapping[str, RateCurve]], channels: Sequence[str], k: int,
+                              far_per_hr: float, tolerance_s: float, radii: Sequence[float]) -> np.ndarray:
+    """
+    ``array_threshold`` of the matched search, one rate curve per template radius (``curves_by_radius[R]``): the
+    threshold at every radius of ``radii``, log-R interpolated between the radii that have a curve and constant
+    beyond them.
+    """
+    nodes = sorted(float(r) for r in curves_by_radius)
+    thr = [array_threshold(curves_by_radius[r], channels, k, far_per_hr, tolerance_s)[0] for r in nodes]
+    return np.interp(np.log(np.asarray(radii, float)), np.log(nodes), thr)
+
+
 def detection_probability(snr_by_tel: Mapping[str, np.ndarray], threshold, min_ntel: int,
                           snr_scatter: float = 1.0) -> np.ndarray:
     """
@@ -986,15 +1001,21 @@ def width_signals(star: TargetStar, cfg: MinSizeConfig, instrument, radii: Optio
 
 def detection_width(star: TargetStar, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
                     templates: Mapping[str, Mapping[float, np.ndarray]],
-                    signals: Mapping[str, Mapping[float, Tuple[np.ndarray, np.ndarray]]], *, k: int, threshold: float,
+                    signals: Optional[Mapping[str, Mapping[float, Tuple[np.ndarray, np.ndarray]]]], *, k: int,
+                    threshold: "float | Mapping[float, float]",
                     focus_gain: float = 1.0, theory_only: bool = False,
-                    wavelength_m: float = WIDTH_WAVELENGTH_M) -> pd.DataFrame:
+                    wavelength_m: float = WIDTH_WAVELENGTH_M, centred: bool = False) -> pd.DataFrame:
     """
     Detection width W(R) = 2 integral_0^inf P(R, b) db of the telescopes ``group`` (one run, the channels that
     take part) detecting an event with ``k`` of them above ``threshold``: P(R, b) is ``detection_probability`` of
     the expected SNR of the event at impact parameter b searched with the b = 0 template (what the search does).
     ``templates`` and ``signals``: {"MAGIC" | "LST": template_family / width_signals} of ``star``, on cfg.radii_m.
-    The telescope offsets (~100 m) are neglected against the impact parameters (km).
+    The telescope offsets (~100 m) are neglected against the impact parameters (km). ``threshold`` is a number or
+    {radius_m: number} (the matched search has a threshold per template).
+
+    ``centred``: only events through the centre of the shadow are assumed, each detected with P(R, b = 0) and no
+    other impact parameter: W = H(R) P(R, 0), ``eff_eff`` = P(R, 0), ``p_tail`` is NaN. The event is its own template, so
+    ``signals`` (``width_signals``, the expensive part) is not needed and may be None.
 
     Rows: radius_m, h_m (H(R)), width_m, eff_eff (W / H, it can exceed 1), p_b0 (P at b = 0, the efficiency used
     elsewhere), p_tail (P at the outermost node; > ~0.02 means the integral is cut too early).
@@ -1006,12 +1027,21 @@ def detection_width(star: TargetStar, group: Sequence[NoiseProfile], cfg: MinSiz
         r = float(r)
         snr = {}
         for ch, f in evals.items():
+            if centred:
+                v = np.asarray(f(templates[kind[ch]][r]), float)                           # scalar or (n_block,)
+                snr[ch] = v.reshape(1) if v.ndim == 0 else v[:, None]                       # (1,) or (n_block, 1)
+                continue
             b, resid = signals[kind[ch]][r]
             vals = np.array([f(templates[kind[ch]][r], resid[i]) for i in range(len(b))])    # (n_b,) or (n_b, n_block)
             snr[ch] = vals if vals.ndim == 1 else vals.T
-        prob = detection_probability(snr, threshold, k, cfg.snr_scatter)
-        width = 2.0 * _trapz(prob, b)
+        prob = detection_probability(snr, threshold[r] if isinstance(threshold, Mapping) else threshold, k,
+                                     cfg.snr_scatter)
         h = float(shadow_width_m(r, star, cfg, wavelength_m))
+        if centred:
+            rows.append({"radius_m": r, "h_m": h, "width_m": h * float(prob[0]), "eff_eff": float(prob[0]),
+                         "p_b0": float(prob[0]), "p_tail": float("nan")})
+            continue
+        width = 2.0 * _trapz(prob, b)
         rows.append({"radius_m": r, "h_m": h, "width_m": width, "eff_eff": width / h, "p_b0": float(prob[0]),
                      "p_tail": float(prob[-1])})
     return pd.DataFrame(rows)
@@ -1072,13 +1102,14 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
                   radii: Sequence[float] = CALIBRATION_RADII_M, *, sf_mode: str = "measured",
                   n_trials: Optional[int] = None, seed: int = 0, bank=None,
                   patterns: Optional[dict] = None,
-                  full_candidates: Optional[list] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+                  full_candidates: Optional[list] = None,
+                  matched: bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Array injections of one run and one correction (``noise_removal.injection_efficiency_array``).
 
-    The search is the one that writes real_candidates.csv: the method's reshaped bank of the star's own size,
-    ``mimic.star_bank(ccfg.mimic, obs, ...)`` (``bank`` replaces it, e.g. the fixed 0.03 mas bank of the older
-    search). The injected pattern is the observed star, at its own size (``mimic.observed_star_mas``), through the
+    The search is the one that writes real_candidates.csv: the method's reshaped bank of the star's own size, through
+    the response of each channel's telescope, ``mimic.star_bank(ccfg.mimic, obs, ...)`` (``bank`` replaces it for every
+    channel, e.g. the fixed 0.03 mas bank of the older search). The injected pattern is the observed star, at its own size (``mimic.observed_star_mas``), through the
     telescope's own response (``injection_patterns``), diluted by the star fraction of each channel:
     ``sf_mode="measured"`` is the profile's (what the prediction uses), ``"model"`` the noise
     model's. ``patterns`` is a {kind: {R: (x, I)}} cache that is filled in (pass the same dict for the
@@ -1087,11 +1118,18 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
     synthetic run, which has no real_candidates.csv. Returns (trials, candidates, run_calib);
     run_calib has the full-run search statistics per channel (SNR-trace std and MAD-sigma, number of
     candidates) to compare with real_candidates.csv.
+
+    ``matched`` (the best case, no template-sampling effects): the bank has exactly the injected ``radii``, for the
+    star's own size, through each telescope's response (``mimic.star_bank``), and every radius is searched with its own
+    template alone: the injections of radius R, and the blind search of the uninjected run, which is done once per
+    radius (``full_candidates`` rows carry the template radius, ``run_calib`` has a ``radius_m`` column: the false-alarm
+    rate of each template, ``synthetic.rate_curves_from_candidates(by=(..., "radius_m"))``). ``bank`` is not allowed then.
     """
     from ..observations.photometry import good_time_lightcurve
     from ..simulation.instruments import Instrument
     from ..simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU
-    from .mimic import _template_duration, bin_lightcurve, observed_star_mas, search_lightcurve, star_bank
+    from .mimic import (_template_duration, bank_instrument, bin_lightcurve, observed_star_mas, search_lightcurve,
+                        star_bank)
     from .noise_removal import (build_methods, injection_efficiency_array, reshaped_templates,
                                 shadow_direction_enu)
 
@@ -1103,8 +1141,17 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
         ccfg = replace(ccfg, n_trials=n_trials)
     name = csv_method_name(correction)
     v_bank = shadow_velocity_opposition(ccfg.mimic.distance_au + EARTH_SEMIMAJOR_AXIS_AU)
-    templates_raw = bank if bank is not None else star_bank(ccfg.mimic, obs, v_bank)
-    dur = _template_duration(templates_raw)
+    mimic_cfg = ccfg.mimic
+    if matched:
+        if bank is not None:
+            raise ValueError("matched search: the bank is built here, at the injected radii; do not pass one")
+        if abs(v_bank - cfg.velocity_mps()) > 1.0:
+            raise ValueError(f"matched search: the bank's shadow velocity ({v_bank:.0f} m/s, MimicConfig.distance_au + 1 AU) "
+                             f"differs from the injections' ({cfg.velocity_mps():.0f} m/s, MinSizeConfig.heliocentric_au)")
+        mimic_cfg = replace(ccfg.mimic, template_radii_m=tuple(float(r) for r in radii), per_star_size=True)
+    templates_by_ch = {p.channel: bank if bank is not None else
+                       star_bank(mimic_cfg, obs, v_bank, bank_instrument(p.telescope, cfg.filter_type)) for p in group}
+    dur = _template_duration(next(iter(templates_by_ch.values())))
     channels = [p.channel for p in group]
     lcs = {ch: obs.lightcurve(ch) for ch in channels}
     key = {"night": night.name, "observation": obs.name, "correction": correction, "sf_mode": sf_mode}
@@ -1113,15 +1160,20 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
     for p in group:
         ch = p.channel
         methods[ch] = build_methods(lcs[ch], night.dc_report, night.telescope(ch).dc_key, [name])[name]
-        bank_m[ch] = reshaped_templates(lcs[ch], methods[ch], templates_raw, v_bank, ccfg)
+        bank_m[ch] = reshaped_templates(lcs[ch], methods[ch], templates_by_ch[ch], v_bank, ccfg)
         corrected[ch] = methods[ch].correct(lcs[ch])
         real = bin_lightcurve(good_time_lightcurve(corrected[ch], obs.good_time), ccfg.mimic.bin_samples)
-        rows, _, c = search_lightcurve(real, bank_m[ch], ccfg.snr_floor, dur, ccfg.mimic.sigma_window_s)
-        if full_candidates is not None:
-            full_candidates.extend({**key, "channel": ch, "telescope": p.telescope, **r} for r in rows)
-        calib_rows.append({**key, "channel": ch, "telescope": p.telescope, "n_candidates": len(rows),
-                           "n_ge5": sum(r["snr"] >= 5.0 for r in rows), "snr_std": c["snr_std"],
-                           "snr_mad_sigma": c["snr_mad_sigma"], "live_s": len(real.time) * real.dt})
+        searches = ([(float(r), {float(r): bank_m[ch][float(r)]}) for r in radii] if matched else [(None, bank_m[ch])])
+        for radius_t, templates in searches:
+            rows, _, c = search_lightcurve(real, templates, ccfg.snr_floor, dur, ccfg.mimic.sigma_window_s,
+                                          sigma_method=ccfg.mimic.sigma_method,
+                                          baseline_method=ccfg.mimic.baseline_method)
+            if full_candidates is not None:
+                full_candidates.extend({**key, "channel": ch, "telescope": p.telescope, **r} for r in rows)
+            calib_rows.append({**key, "channel": ch, "telescope": p.telescope,
+                               **({"radius_m": radius_t} if matched else {}), "n_candidates": len(rows),
+                               "n_ge5": sum(r["snr"] >= 5.0 for r in rows), "snr_std": c["snr_std"],
+                               "snr_mad_sigma": c["snr_mad_sigma"], "live_s": len(real.time) * real.dt})
 
     star = observed_target(obs, observed_star_mas(obs))                  # the star's own size, whatever the bank
     patterns = {} if patterns is None else patterns
@@ -1141,7 +1193,7 @@ def calibrate_run(night, obs, group: Sequence[NoiseProfile], cfg: MinSizeConfig,
     rng = np.random.default_rng([seed, zlib.crc32(f"{night.name}/{obs.name}/{name}/{sf_mode}".encode())])
     trial_rows, cand_rows = injection_efficiency_array(
         lcs, methods, ch_patterns, bank_m, dur, cfg.velocity_mps(), fractions, obs.good_time, ccfg, rng,
-        list(radii), direction_enu=direction, corrected_full=corrected)
+        list(radii), direction_enu=direction, corrected_full=corrected, matched=matched)
     return (pd.DataFrame([{**key, **r} for r in trial_rows]), pd.DataFrame([{**key, **r} for r in cand_rows]),
             pd.DataFrame(calib_rows))
 
@@ -1240,6 +1292,32 @@ def _binomial_err(hits: int, n: int) -> float:
     return float(np.sqrt(p * (1.0 - p) / n)) if n else np.nan
 
 
+def _threshold_lookup(thresholds: pd.DataFrame):
+    """
+    ``(table, at)`` for a thresholds table (``thresholds_table``): ``table`` has a key (far_per_hr, config) per
+    threshold, ``at(far, config, radius)`` its value. With a ``radius_m`` column (the matched search has a threshold
+    per template radius) the value is interpolated in log R between the radii of the table, constant beyond them,
+    and ``radius`` may be an array; without it ``radius`` is ignored.
+    """
+    per_radius = "radius_m" in thresholds.columns
+    table = {}
+    for (far, config), g in thresholds.groupby(["far_per_hr", "config"]):
+        if per_radius:
+            g = g.sort_values("radius_m")
+            table[(far, config)] = (np.log(g["radius_m"].to_numpy(float)), g["threshold"].to_numpy(float))
+        else:
+            table[(far, config)] = float(g["threshold"].iloc[-1])
+
+    def at(far, config, radius=None):
+        value = table[(far, config)]
+        if not isinstance(value, tuple):
+            return value
+        out = np.interp(np.log(radius), *value)
+        return float(out) if np.ndim(out) == 0 else out
+
+    return table, at
+
+
 def measured_efficiency(trials: pd.DataFrame, cands: pd.DataFrame, thresholds: pd.DataFrame,
                         tolerance_s: float) -> pd.DataFrame:
     """
@@ -1248,14 +1326,15 @@ def measured_efficiency(trials: pd.DataFrame, cands: pd.DataFrame, thresholds: p
     Single channel: it has a candidate (within the search window of ``injection_efficiency_array``) above its
     threshold. k of n: ``coincidence.match_coincidences(min_ntel=k)`` of the candidates above the common
     threshold gives an event within ``tolerance_s`` of the injection time. Rows: the run keys, radius_m,
-    config, far_per_hr, threshold, n, hits, eff, eff_err.
+    config, far_per_hr, threshold, n, hits, eff, eff_err. ``thresholds`` may have a ``radius_m`` column (the matched
+    search: a threshold per template radius, see ``_threshold_lookup``).
     """
     from .coincidence import TelescopeSearchResult, match_coincidences
     from .matched_filter import Candidate
 
     if trials.empty:
         return pd.DataFrame()
-    thr = {(r.far_per_hr, r.config): r.threshold for r in thresholds.itertuples()}
+    thr, thr_at = _threshold_lookup(thresholds)
     fars = sorted({f for f, _ in thr})
     grp_cols = _RUN + ["radius_m", "trial"]
     t0s = trials.groupby(grp_cols)["t0_s"].mean()
@@ -1275,7 +1354,7 @@ def measured_efficiency(trials: pd.DataFrame, cands: pd.DataFrame, thresholds: p
             for config, k in configs:
                 if (far, config) not in thr:
                     continue
-                s = thr[(far, config)]
+                s = thr_at(far, config, radius)
                 if k == 1:
                     ok = bool(np.any((ch_arr == config) & (snr_arr >= s)))
                 else:
@@ -1290,7 +1369,7 @@ def measured_efficiency(trials: pd.DataFrame, cands: pd.DataFrame, thresholds: p
                 count[kk] = count.get(kk, 0) + 1
                 hits[kk] = hits.get(kk, 0) + int(ok)
     rows = [{**dict(zip(_RUN, kk[:4])), "radius_m": kk[4], "config": kk[5], "far_per_hr": kk[6],
-             "threshold": thr[(kk[6], kk[5])], "n": n, "hits": hits[kk], "eff": hits[kk] / n,
+             "threshold": thr_at(kk[6], kk[5], kk[4]), "n": n, "hits": hits[kk], "eff": hits[kk] / n,
              "eff_err": _binomial_err(hits[kk], n)} for kk, n in count.items()]
     return pd.DataFrame(rows)
 
@@ -1342,12 +1421,13 @@ def predicted_efficiency(snr_pred: pd.DataFrame, thresholds: pd.DataFrame,
     Detection probability from ``predicted_snr`` at the same thresholds as ``measured_efficiency``, with the
     expected SNRs multiplied by ``scales[correction][0]`` and a scatter ``scales[correction][1]`` (default
     1, 1). With several ``block`` rows the probability is averaged over the blocks (``detection_probability``).
-    Rows: night, observation, correction, radius_m, config, far_per_hr, threshold, eff_pred.
+    Rows: night, observation, correction, radius_m, config, far_per_hr, threshold, eff_pred. With a ``radius_m``
+    column in ``thresholds`` (the matched search) the threshold of each radius is interpolated (``_threshold_lookup``).
     """
     scales = scales or {}
     if "block" not in snr_pred:
         snr_pred = snr_pred.assign(block=0)
-    thr = {(r.far_per_hr, r.config): r.threshold for r in thresholds.itertuples()}
+    thr, thr_at = _threshold_lookup(thresholds)
     fars = sorted({f for f, _ in thr})
     rows = []
     for (night, obs, corr), g in snr_pred.groupby(["night", "observation", "correction"]):
@@ -1361,18 +1441,20 @@ def predicted_efficiency(snr_pred: pd.DataFrame, thresholds: pd.DataFrame,
         for far in fars:
             for ch, v in snr.items():
                 if (far, ch) in thr:
-                    p = ndtr((v - thr[(far, ch)]) / scatter)
+                    t = np.broadcast_to(thr_at(far, ch, radii), radii.shape)
+                    p = ndtr((v - t) / scatter)
                     p = p if p.ndim == 1 else np.nanmean(p, axis=0)
                     rows.extend({"night": night, "observation": obs, "correction": corr, "radius_m": float(r),
-                                 "config": ch, "far_per_hr": far, "threshold": thr[(far, ch)], "eff_pred": float(x)}
-                                for r, x in zip(radii, p))
+                                 "config": ch, "far_per_hr": far, "threshold": float(tr), "eff_pred": float(x)}
+                                for r, x, tr in zip(radii, p, t))
             for k in range(2, n + 1):
                 label = f"{k}of{n}"
                 if (far, label) in thr:
-                    p = detection_probability(snr, thr[(far, label)], k, scatter)
+                    t = np.broadcast_to(thr_at(far, label, radii), radii.shape)
+                    p = detection_probability(snr, t, k, scatter)
                     rows.extend({"night": night, "observation": obs, "correction": corr, "radius_m": float(r),
-                                 "config": label, "far_per_hr": far, "threshold": thr[(far, label)],
-                                 "eff_pred": float(x)} for r, x in zip(radii, p))
+                                 "config": label, "far_per_hr": far, "threshold": float(tr),
+                                 "eff_pred": float(x)} for r, x, tr in zip(radii, p, t))
     return pd.DataFrame(rows)
 
 

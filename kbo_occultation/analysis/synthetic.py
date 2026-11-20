@@ -132,6 +132,7 @@ class SyntheticNight:
     name: str
     channels: List[str]
     dc_report: Optional[str] = None
+    optical_filter: Optional[str] = None
 
     def telescope(self, channel: str) -> TelescopeConfig:
         return ORM_ARRAY.by_channel(channel)
@@ -224,11 +225,14 @@ def rate_curves_from_candidates(cands: pd.DataFrame, run_calib: pd.DataFrame, n_
     ``full_candidates`` as a DataFrame, and its ``run_calib`` for the live time): the synthetic counterpart of
     ``min_size.rate_curves`` on real_candidates.csv. ``key`` is the tuple of the ``by`` columns, which both
     tables must have (add e.g. a magnitude column to threshold per magnitude); the live time of a channel is
-    the sum of ``live_s`` over its runs (``sf_mode`` "measured" rows, as the search does not depend on it).
+    the sum of ``live_s`` over its runs (``sf_mode`` "measured" rows, as the search does not depend on it). A
+    ``by`` column that is not a run key, e.g. ``radius_m`` of the matched search (one blind search per template),
+    keeps one row per value of it.
     """
     by = list(by)
     calib = run_calib[run_calib["sf_mode"] == "measured"] if "sf_mode" in run_calib else run_calib
-    calib = calib.drop_duplicates(["night", "observation", "correction", "channel"])
+    run_keys = ["night", "observation", "correction", "channel"]
+    calib = calib.drop_duplicates(run_keys + [c for c in by if c not in run_keys])
     hours = calib.groupby(by + ["channel"])["live_s"].sum() / 3600.0
     out: Dict[tuple, Dict[str, RateCurve]] = {}
     for (*key, ch), h in hours.items():

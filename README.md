@@ -455,7 +455,9 @@ uncertain; SNR traces of real runs have σ ≈ 1.1–1.6 and MAD-σ ≈ 1.03
 
 `kbo-night mimic 2025-12-16` (or `kbo mimic --night 2025-12-16`; none = all nights)
 searches every logged star run with three corrections (raw, `dc_detrend`,
-`dc_despike`), keeps all candidates above SNR 3 and writes `outputs/mimic/<nights>/`:
+`dc_despike`), keeps all candidates above SNR 3 and writes `outputs/mimic/<nights>/`. The templates of each channel are the
+Fresnel patterns of the star seen through that telescope's response (`mimic.bank_instrument`: atmosphere × telescope, as the injections of
+`min_size`) for a KBO 39 AU from the Earth; `--band-templates` gives the 320-450 nm trapezoid and 40 AU of the older search:
 
 | File | Content |
 |---|---|
@@ -565,9 +567,9 @@ Median R50 [m] over the 7 three-channel runs (range of the runs), measured noise
   change of the star light is unknown ("star": fixed in star units, "total": fixed in total-signal units); with "total" the 2-of-3
   R50 at B = 9 is 84 m instead of 67 m, as large as the bank effect below.
 - The b = 0 R50 flatters the cross-section: at R50 the detection width W = 2 ∫ P(R, b) db is ~10 % of the shadow width H(R).
-  `outputs/min_size/observing_time.csv` turns W(R) into observing time per detected event with the size distribution of Nihei et al.
-  (2007): about 150-270 h on one star for the whole distribution (2 of 3, q_s = 4), 335-570 h at best for objects of one size (D ≈ 160-200 m), against
-  a few hours in the shot-noise-only model of `tests/observing_time_vs_kbo_size.py` (overlay with `--width-csv`).
+  `outputs/min_size/observing_time.csv` turns W(R) into observing time per detected event with the size distribution of Bickerton et al.
+  (2009, eq. 11; Q_1 = 3.2e8): about 15-27 h on one star for the whole distribution (2 of 3, q_s = 4), 34-57 h at best for objects of one size (D ≈ 160-200 m), against
+  well under an hour in the shot-noise-only model of `tests/observing_time_vs_kbo_size.py` (overlay with `--width-csv`).
 - The search bank is built for a 0.03 mas star. The table above assumes a bank matched to each target (its own template); with the
   current bank a smaller star is found with up to 40 % less SNR (B = 7 / 8 / 9: 1 / 24 / 40 %), and the 2-of-3 R50 stays at
   84 / 83 / 87 m instead of falling to 83 / 72 / 67 m (`outputs/min_size/bank_effect.csv`). A per-star bank is the cheapest gain.
@@ -672,8 +674,11 @@ light curves and running the same search on them:
 [notebooks/synthetic_upper_limits.ipynb](notebooks/synthetic_upper_limits.ipynb) walks through the whole chain on
 **synthetic** light curves, with plots at each step: templates, noise (white and measured-excess), the matched-filter search,
 false-alarm thresholds, injection / recovery, the minimum detectable size and what changes it, observing hours per
-detected event and the upper limits on the surface density, against the literature. It runs without observation data
-(coloured noise needs the noise profiles of `outputs/min_size/`, measured from the logged runs when missing).
+detected event and the upper limits on the surface density, against the literature. It is the **best case**: the search
+template is the injected signal (`calibrate_run(..., matched=True)`: each radius is searched with its own template alone,
+and has its own false-alarm threshold) and only central chords are counted (`EVENTS`); an appendix measures what a bank of
+templates and a star of the wrong size cost. It runs without observation data (coloured noise needs the noise profiles of
+`outputs/min_size/`, measured from the logged runs when missing).
 
 All real-data examples choose their input with `NIGHT, OBSERVATION = …` at the top
 and `load_observation_log().get(NIGHT, OBSERVATION)`. They write to `outputs/`.

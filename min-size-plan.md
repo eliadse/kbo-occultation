@@ -81,7 +81,8 @@ theory case the photon loss wins and R50 rises.
    SNR 6-7 against a threshold of 10.9, i.e. the real SNR is ~1.5× higher (whitened); for `raw` the
    factor is 1.5-4. Likely cause: the real search normalises with a robust (MAD) scatter, which on
    intermittent red noise is below the rms that a Welch PSD gives; secondary: best-of-4 templates, the
-   320-450 nm trapezoid band of the injection templates vs the instrument response used here, whitening measured at full cadence. `MinSizeConfig.snr_scale`
+   320-450 nm trapezoid band of the search templates vs the instrument response used here (the search bank now uses the
+   telescope response and the injections' geometry, `MimicConfig.response`), whitening measured at full cadence. `MinSizeConfig.snr_scale`
    multiplies every expected SNR for this; it is 1 until calibrated.
    *Step 2: for `whitened` the gap was mostly an artefact of comparing with the single-telescope threshold (10.9). At the
    coincidence thresholds (about 5) the whitened prediction is already unbiased (scale 0.91). The pessimism is real for
@@ -255,9 +256,10 @@ P(b = 0) = 0.33, W = 0.5 km against H = 5.6 km); W / H reaches 0.5 at R about 16
 fringes outside the geometric shadow are detected; P at the outermost impact parameter is < 2e-11, so the integral is not cut short).
 So R50 for a central chord flatters the cross-section.
 
-Observing time per detected event, whole size distribution (Nihei q_s = 4, break 80 km, one star, 39 AU): 2 of 3 measured 273 / 183 / 146 h at
-B = 7 / 8 / 9; theory-only 36 / 39 / 55 h; MAGIC-2 391 / 278 / 247 h; MAGIC-1 519 / 359 / 299 h; LST-1 2400 / 1352 / 787 h. For one size the minimum
-for 2 of 3 is 572 / 387 / 335 h at D = 200 / 159 / 159 m (B = 7 / 8 / 9; theory-only about 70-115 h at D = 100-125 m). The old shot-noise model (3 MAGIC, 100 ms, threshold |I - 1| > 1/SNR) says a few hours
+Observing time per detected event, whole size distribution (Bickerton et al. 2009 eq. 11, Q_1 = 3.2e8, q_s = 4, break 80 km, one star, 39 AU): 2 of 3 measured 27 / 18 / 15 h at
+B = 7 / 8 / 9; theory-only 3.6 / 3.9 / 5.5 h; MAGIC-2 39 / 28 / 25 h; MAGIC-1 52 / 36 / 30 h; LST-1 240 / 135 / 79 h. For one size the minimum
+for 2 of 3 is 57 / 39 / 34 h at D = 200 / 159 / 159 m (B = 7 / 8 / 9; theory-only about 7-12 h at D = 100-125 m). These are the 2026-11 numbers
+divided by 10: until 2026-11-20 Q_1 was 3.2e7 (copied from Víctor's notebook), ten times below the paper. The old shot-noise model (3 MAGIC, 100 ms, threshold |I - 1| > 1/SNR) says well under an hour
 for D = 30-60 m: its widths (10-20 km) are larger than H(R) because the threshold is tiny, so it is very optimistic.
 
 ## Synthetic runs (2026-11-16)
@@ -284,6 +286,18 @@ made with the **fixed 0.03 mas bank** of the older search, i.e. today's `--fixed
   (`synthetic_smoke_star`, 6 trials x 5 radii, so only indicative): the matched and the bank prediction coincide (2-of-3 R50 39.9 m both, measured 40.0 m)
   and measured / predicted SNR is 0.96-0.99, against 0.84 (matched) with the fixed bank at the same magnitude: the bank loss is gone for a star of known size.
   A full per-star run (white and coloured, B = 7 / 8 / 9) is still to be done.
+
+## Best case: the matched search (2026-11-19)
+
+`min_size.calibrate_run(..., matched=True)` (with `noise_removal.injection_efficiency_array(..., matched=True)`) removes the effects of
+sampling the template space, for the tutorial `notebooks/synthetic_upper_limits.ipynb`: the bank is built at exactly the injected radii
+(`mimic.star_bank`, the star's own size, the telescope's response, 39 AU: it keeps >= 0.999 of the matched SNR), every radius is searched
+with its own template alone, and the blind search of the uninjected run is done once per radius, so each radius has its own rate
+curves (`synthetic.rate_curves_from_candidates(by=(..., "radius_m"))`) and thresholds. `measured_efficiency` and `predicted_efficiency`
+take thresholds with a `radius_m` column (log-R interpolated); `array_threshold_by_radius` does the same for the predictions.
+`detection_width(..., centred=True)` gives W = H(R) P(R, 0) for centred events only. Not in it, and left to a realistic iteration: the
+bank's radius sampling and best-of-N false alarms (the appendix of the notebook measures the SNR loss and R50 at the matched
+thresholds), a wrong star, off-centre events, non-Gaussian noise.
 
 ## Open
 

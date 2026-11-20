@@ -64,9 +64,10 @@ class MimicConfig:
     template_radii_m: Sequence[float] = (50.0, 100.0, 300.0, 1000.0)
     star_mas: float = 0.03                   # angular radius of the templates; the fixed value / fallback of ``star_bank``
     per_star_size: bool = True               # templates of the observed star (size from its B magnitude): ``star_bank``
-    distance_au: float = 40.0
+    distance_au: float = 39.0                # Earth -> KBO at opposition; + 1 AU = the 40 AU heliocentric of min_size
     star_temperature_K: float = 10000.0
-    band: BandpassConfig = field(default_factory=lambda: BandpassConfig(320.0, 450.0, 21))
+    response: str = "telescope"              # templates through each telescope's response (``bank_instrument``) | "band"
+    band: BandpassConfig = field(default_factory=lambda: BandpassConfig(320.0, 450.0, 21))   # "band": the trapezoid; "telescope": its n_lambda
     bin_samples: int = 10
     n_surrogates: int = 20
     n_shifts: int = 200
@@ -74,27 +75,63 @@ class MimicConfig:
     n_reference_times: int = 2000
     seed: int = 0
     sigma_window_s: Optional[float] = None   # window of the empirical filter-output sigma (None = detrend window)
+    sigma_method: str = "blocks"             # empirical_filter_sigma method: "sliding" | "blocks"
+    baseline_method: str = "median"         # compute_baseline_and_sigma method: "clipped_triangle" | "median"
     pixel_target: int = 0
     pixels_background: Tuple[int, ...] = (1, 2)
 
 
 # ───────────────────────── templates and searching ──────────────────────────
 
+_BANK_INSTRUMENTS: Dict[tuple, object] = {}
+
+
+def bank_instrument(telescope_name: str = "MAGIC", filter_type: Optional[str] = None):
+    """
+    The (cached) ``Instrument`` whose ``response()`` shapes the templates of a telescope: LST for LST-*, MAGIC
+    otherwise, at La Palma, with the optical filter ``filter_type`` (None: no filter). The same model as the injected
+    patterns of ``min_size``. Not ``snr.instrument_for``: that one's extinction is changed per night.
+    """
+    from ..simulation.instruments import Instrument
+
+    kind = "LST" if str(telescope_name).startswith("LST") else "MAGIC"
+    if (kind, filter_type) not in _BANK_INSTRUMENTS:
+        _BANK_INSTRUMENTS[(kind, filter_type)] = Instrument(kind, filter_type=filter_type, site="LaPalma")
+    return _BANK_INSTRUMENTS[(kind, filter_type)]
+
+
+def _bandpass(cfg: MimicConfig, instrument=None) -> BandpassConfig:
+    """Wavelength range and sampling of the templates: the instrument's own (at ``cfg.band.n_lambda`` samples), or
+    the trapezoid ``cfg.band`` with ``cfg.response == "band"``."""
+    if cfg.response == "band":
+        return cfg.band
+    if cfg.response != "telescope":
+        raise ValueError(f"unknown MimicConfig.response {cfg.response!r}")
+    instrument = instrument or bank_instrument()
+    return BandpassConfig(*instrument.response_band(n_lambda=cfg.band.n_lambda))
+
+
 def search_templates(cfg: MimicConfig, v_mps: float, star_mas: Optional[float] = None,
-                     temperature_K: Optional[float] = None) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
+                     temperature_K: Optional[float] = None, instrument=None
+                     ) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
     """
     {radius: (template_time_s, intensity)}, shared span so one detrend window fits all. The star is
     ``cfg.star_mas`` / ``cfg.star_temperature_K`` unless ``star_mas`` / ``temperature_K`` are given
-    (``star_bank`` gives them for an observed star).
+    (``star_bank`` gives them for an observed star). Through ``instrument.response()`` (default ``bank_instrument()``)
+    with ``cfg.response == "telescope"``, through the trapezoid ``cfg.band`` with ``"band"``.
     """
     star_mas = cfg.star_mas if star_mas is None else star_mas
     temperature_K = cfg.star_temperature_K if temperature_K is None else temperature_K
     half = 10000.0
     grid = GridConfig(half, int(2 * half / 5.0))
     r_star = star_mas * mas_to_rad * cfg.distance_au * AU_m
-    engine = OccultationEngine(StarConfig(temperature_K, star_mas), cfg.band, grid,
+    response = None
+    if cfg.response == "telescope":
+        instrument = instrument or bank_instrument()
+        response = instrument.response
+    engine = OccultationEngine(StarConfig(temperature_K, star_mas), _bandpass(cfg, instrument), grid,
                                NumericalConfig(n_r_grid=4000, n_star_side=48),
-                               r_max_m=1.3 * (half + 2 * r_star))
+                               response=response, r_max_m=1.3 * (half + 2 * r_star))
     out = {}
     for radius in cfg.template_radii_m:
         x_m, intensity = engine.compute(KBOConfig(radius, cfg.distance_au, 0.0), star_mas)
@@ -125,20 +162,27 @@ def star_mas_for(cfg: MimicConfig, obs) -> float:
 _BANK_CACHE: Dict[tuple, Dict[float, Tuple[np.ndarray, np.ndarray]]] = {}
 
 
-def star_bank(cfg: MimicConfig, obs, v_mps: float) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
+def star_bank(cfg: MimicConfig, obs, v_mps: float, instrument=None) -> Dict[float, Tuple[np.ndarray, np.ndarray]]:
     """
     The template bank of the star ``obs`` (``search_templates`` with its angular radius, ``star_mas_for``, and its
-    temperature from the spectral type, else ``cfg.star_temperature_K``). The star's size is known, the KBO's is not,
-    so the bank spans the KBO radii only. Cached by star size, temperature, radii, distance, band and velocity: do not
-    modify the returned arrays.
+    temperature from the spectral type, else ``cfg.star_temperature_K``), through the response of ``instrument``
+    (``bank_instrument`` of the telescope that recorded the light curve). The star's size is known, the KBO's is not,
+    so the bank spans the KBO radii only. Cached by star size, temperature, radii, distance, response and velocity (the
+    response by its sampled curve up to scale, so telescopes with the same shape share a bank): do not modify the returned arrays.
     """
     star_mas = star_mas_for(cfg, obs)
     teff = teff_from_spectral_type(getattr(obs, "spectral_type", None)) if cfg.per_star_size else None
     temperature = float(teff) if teff else cfg.star_temperature_K
+    band = _bandpass(cfg, instrument)
+    shape = (band.lam_min_nm, band.lam_max_nm, band.n_lambda)
+    if cfg.response == "telescope":
+        lam = np.linspace(band.lam_min_nm, band.lam_max_nm, band.n_lambda)
+        resp = np.asarray((instrument or bank_instrument()).response(lam), float)
+        shape += (np.round(resp / resp.max(), 6).tobytes(),)      # the engine normalises the weights: only the shape counts
     key = (round(star_mas, 6), round(temperature, 1), tuple(float(r) for r in cfg.template_radii_m),
-           cfg.distance_au, (cfg.band.lam_min_nm, cfg.band.lam_max_nm, cfg.band.n_lambda), round(float(v_mps), 3))
+           cfg.distance_au, cfg.response, shape, round(float(v_mps), 3))
     if key not in _BANK_CACHE:
-        _BANK_CACHE[key] = search_templates(cfg, v_mps, star_mas, temperature)
+        _BANK_CACHE[key] = search_templates(cfg, v_mps, star_mas, temperature, instrument)
     return _BANK_CACHE[key]
 
 
@@ -170,6 +214,7 @@ def _template_duration(templates) -> float:
 
 def search_lightcurve(lc: LightCurve, templates, snr_threshold: float,
                       template_duration_s: float, sigma_window_s: Optional[float] = None,
+                      sigma_method: str = "blocks", baseline_method: str = "median",
                       peak_near: Optional[Tuple[float, float]] = None):
     """
     Blind search of one (binned, corrected) light curve with every template.
@@ -182,13 +227,14 @@ def search_lightcurve(lc: LightCurve, templates, snr_threshold: float,
     ``calib``: the largest SNR of any template within ``half_width_s`` of ``t0``, whether or not it
     is above ``snr_threshold`` (``nan`` if the window holds no lag). Used by the injection studies.
     """
-    baseline, sigma = compute_baseline_and_sigma(lc.time, lc.signal, template_duration_s)
+    baseline, sigma = compute_baseline_and_sigma(lc.time, lc.signal, template_duration_s, method=baseline_method)
     best: List[dict] = []
     stds, mads = [], []
     peak = {"peak_snr": np.nan, "peak_time": np.nan, "peak_radius_m": np.nan}
     for radius, (tt, ti) in templates.items():
         mf = sliding_matched_filter_snr(lc.time, lc.signal, tt, ti, baseline=baseline, sigma=sigma,
-                                        normalization="empirical", sigma_window_s=sigma_window_s)
+                                        normalization="empirical", sigma_window_s=sigma_window_s,
+                                        sigma_method=sigma_method)
         stds.append(float(np.std(mf.snr)))
         mads.append(float(1.4826 * np.median(np.abs(mf.snr - np.median(mf.snr)))))
         if peak_near is not None:
@@ -395,7 +441,9 @@ def run_mimic(log, nights=None, cfg: Optional[MimicConfig] = None, *, include_ex
         for obs in night.stars.values():
             if not obs.has_cache:
                 continue
-            templates = star_bank(cfg, obs, v)
+            templates = {ch: star_bank(cfg, obs, v, bank_instrument(night.telescope(ch).name,
+                                                                    getattr(night, "optical_filter", None)))
+                         for ch in night.channels}
             t0, t1 = obs.time_span()
             aux = AuxData(night, cfg, t0, t1)
             p90 = {ch: aux.run_covariates(ch) for ch in night.channels}
@@ -419,7 +467,9 @@ def run_mimic(log, nights=None, cfg: Optional[MimicConfig] = None, *, include_ex
                 real_tel = {}
                 zs = {}
                 for ch, lc in lcs.items():
-                    rows, z, calib = search_lightcurve(lc, templates, cfg.snr_threshold, dur, cfg.sigma_window_s)
+                    rows, z, calib = search_lightcurve(lc, templates[ch], cfg.snr_threshold, dur, cfg.sigma_window_s,
+                                                       sigma_method=cfg.sigma_method,
+                                                       baseline_method=cfg.baseline_method)
                     calib_rows.append({**key, "kind": "real", "channel": ch, **calib})
                     zs[ch] = z
                     real_tel[ch] = (rows, len(lc.time) * lc.dt)
@@ -459,8 +509,9 @@ def run_mimic(log, nights=None, cfg: Optional[MimicConfig] = None, *, include_ex
                     surr_tel = {}
                     for ch, lc in lcs.items():
                         sur = phase_randomized_lightcurve(lc, rng)
-                        rows, z, calib = search_lightcurve(sur, templates, cfg.snr_threshold, dur,
-                                                           cfg.sigma_window_s)
+                        rows, z, calib = search_lightcurve(sur, templates[ch], cfg.snr_threshold, dur,
+                                                           cfg.sigma_window_s, sigma_method=cfg.sigma_method,
+                                                           baseline_method=cfg.baseline_method)
                         calib_rows.append({**key, "kind": "surrogate", "channel": ch, **calib})
                         surr_zs[ch].append(z)
                         surr_tel[ch] = (rows, len(lc.time) * lc.dt)

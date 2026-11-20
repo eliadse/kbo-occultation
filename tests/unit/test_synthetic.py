@@ -146,3 +146,41 @@ def test_end_to_end_peak_snr_matches_the_search_bank_prediction(cfg):
         assert got[(row.channel, row.radius_m)] == pytest.approx(row.snr_pred, rel=0.2)
     matched = ms.predicted_snr(runs, cfg, ["whitened"], radii)
     assert np.all(matched["snr_pred"].to_numpy() >= pred["snr_pred"].to_numpy() - 1e-9)   # the bank cannot beat a perfect match
+
+
+def test_rate_curves_by_radius_keep_the_live_time_of_every_template():
+    calib = pd.DataFrame([{"night": "n", "observation": "o0", "correction": "raw", "sf_mode": "measured", "channel": "A",
+                           "radius_m": r, "live_s": 3600.0} for r in (50.0, 100.0)])
+    cands = pd.DataFrame([{"night": "n", "observation": "o0", "correction": "raw", "channel": "A", "radius_m": r, "snr": s}
+                          for r, s in ((50.0, 4.0), (50.0, 5.0), (100.0, 6.0))])
+    curves = sy.rate_curves_from_candidates(cands, calib, by=("night", "correction", "radius_m"))
+    assert set(curves) == {("n", "raw", 50.0), ("n", "raw", 100.0)}
+    assert curves[("n", "raw", 50.0)]["A"].hours == pytest.approx(1.0)               # not 2 h: one blind search per radius
+    assert len(curves[("n", "raw", 50.0)]["A"].snr) == 2 and len(curves[("n", "raw", 100.0)]["A"].snr) == 1
+
+
+def test_matched_search_uses_the_template_of_the_injected_radius_only(cfg):
+    from dataclasses import replace
+
+    ccfg = ComparisonConfig(n_trials=3, seed=0)
+    radii = [100.0, 200.0]
+    runs = sy.synthetic_runs([8.0], cfg, n_runs=1, run_s=150.0, seed=1)
+    night, obs, group = runs[0]
+    full = []
+    trials, cands, calib = ms.calibrate_run(night, obs, group, cfg, ccfg, "whitened", radii, n_trials=3,
+                                            full_candidates=full, matched=True)
+    assert len(trials) == 3 * 3 * len(radii)
+    assert len(calib) == 3 * len(radii) and set(calib["radius_m"]) == set(radii)       # one blind search per channel and radius
+    assert {r["radius_m"] for r in full} <= set(radii) and len(full) > 0
+    assert len(cands) > 0 and np.all(cands["template_radius_m"] == cands["radius_m"])  # no other template ever searches it
+    assert np.all(np.abs(calib["snr_std"] - 1.0) < 0.15)
+    matched = ms.predicted_snr(runs, cfg, ["whitened"], radii)
+    got = trials.groupby(["channel", "radius_m"])["peak_snr"].median()
+    for row in matched.itertuples():
+        assert got[(row.channel, row.radius_m)] == pytest.approx(row.snr_pred, rel=0.2)
+
+    with pytest.raises(ValueError):
+        ms.calibrate_run(night, obs, group, cfg, ccfg, "whitened", radii, matched=True, bank={})
+    off = replace(ccfg, mimic=replace(ccfg.mimic, distance_au=30.0))                  # another shadow velocity than the injections
+    with pytest.raises(ValueError):
+        ms.calibrate_run(night, obs, group, cfg, off, "whitened", radii, matched=True)

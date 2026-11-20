@@ -1,6 +1,6 @@
 # kbo_occultation/analysis/rates.py
 """
-KBO occultation *event-rate* equations (Nihei et al. 2007).
+KBO occultation *event-rate* equations (Bickerton, Welch & Kavelaars 2009).
 
 These are ported verbatim (physics-wise) from Víctor Pascual's exploratory
 notebook ``tests/diffraction_pattern_expected_reduced.ipynb`` (where they were
@@ -12,16 +12,19 @@ sky surface density of KBOs, how *often* does a star get occulted, and hence
 how long must you observe to expect one event. ``upper_limits.py`` is the
 inverse (what density upper limit a null result implies for a given exposure).
 
-The diffraction-aware shadow width H(r) (Nihei eq. 13) is NOT reimplemented
+The diffraction-aware shadow width H(r) (BWK09 eq. 12-13, the Airy-ring width of
+Nihei et al. 2007) is NOT reimplemented
 here; it is delegated to :func:`kbo_occultation.upper_limits.effective_shadow_width_m`
 so there is a single source of truth. ``effective_shadow_width`` below is a
 thin astropy-units wrapper around it.
 
 References
 ----------
-Nihei, T. C., et al. (2007), AJ 134, 1596 -- "Detectability of Occultations
-of Stars by Objects in the Kuiper Belt and Oort Cloud". Equation numbers in
-the docstrings refer to that paper.
+Bickerton, S. J., Welch, D. L., & Kavelaars, J. J. (2009), AJ 137, 4270 --
+"Kuiper Belt Object Occultations: Expected Rates, False Positives, and Survey
+Design" (arXiv:0902.3457; BWK09). Equation numbers in the docstrings refer to
+that paper. The size variables D_0, D_k are *diameters* in km.
+Nihei, T. C., et al. (2007), AJ 134, 1596 -- source of the shadow width.
 """
 
 import numpy as np
@@ -30,8 +33,9 @@ from astropy import constants as const
 
 from .upper_limits import effective_shadow_width_m
 
-# Size-distribution constants (Nihei et al. 2007, eq. 11 / 14).
-Q_1 = 3.2e7        # normalisation of the cumulative surface density [deg^-2]
+# Size-distribution constants (BWK09 eq. 11, after Gladman et al. 2001 eqs. 12-13).
+# Q_1 was 3.2e7 here and in Víctor's notebook / kbo_occultation_rates: BWK09 prints 3.2e8.
+Q_1 = 3.2e8        # normalisation of the cumulative surface density [deg^-2]
 Q_L = 4.8          # large-object power-law slope
 
 
@@ -46,7 +50,7 @@ def _as_quantity(value, unit, name):
 
 def event_rate(shadow_width, velocity, surface_density, distance):
     """
-    Occultation event rate for a single monitored star (Nihei eq. 8):
+    Occultation event rate for a single monitored star (BWK09 eq. 8):
 
         mu = 2b * v * Sigma * (180 deg / pi / d)^2
 
@@ -82,7 +86,7 @@ def event_rate(shadow_width, velocity, surface_density, distance):
 def kbo_velocity(r_earth, r_kbo, elongation):
     """
     Transverse (shadow) velocity of a KBO on a circular orbit, as projected
-    onto the observer, as a function of solar elongation (Nihei eq. 10):
+    onto the observer, as a function of solar elongation (BWK09 eq. 10):
 
         v = sqrt(G M_sun / r_earth) *
             [ sqrt( (r_e/r_k) * (1 - (r_e/r_k)^2 sin^2 e) ) + cos(e) ]
@@ -114,16 +118,16 @@ def kbo_velocity(r_earth, r_kbo, elongation):
 def surface_density(diameter_break, diameter, q_s):
     """
     Cumulative sky surface density of KBOs at diameter `diameter`
-    (Nihei et al. 2007, eq. 11):
+    (BWK09 eq. 11):
 
         Sigma = Q_1 * (D_break[km])^(q_s - q_L) * (D[km])^(1 - q_s)   [deg^-2]
 
-    with Q_1 = 3.2e7, q_L = 4.8 (module constants).
+    with Q_1 = 3.2e8, q_L = 4.8 (module constants).
 
     Parameters
     ----------
     diameter_break : Quantity [length]
-        Break diameter D_k (Nihei uses 80 km).
+        Break diameter D_k (80 km here; BWK09's Fig. 4 uses 50 km).
     diameter : Quantity [length]
         Diameter(s) at which to evaluate the density (D_0 in the notebook).
     q_s : float
@@ -146,7 +150,7 @@ def surface_density(diameter_break, diameter, q_s):
 def mean_diameter(diameter_break, diameter, q_s):
     """
     Effective (flux-weighted mean) KBO diameter for a broken power-law size
-    distribution (Nihei et al. 2007, eq. 14). This is the single "effective
+    distribution (BWK09 eq. 14). This is the single "effective
     size" fed to :func:`effective_shadow_width` for the smooth analytic
     ("parameterization") rate curve.
 
@@ -178,7 +182,7 @@ def mean_diameter(diameter_break, diameter, q_s):
 
 def effective_shadow_width(wavelength, distance, kbo_radius, star_radius):
     """
-    Diffraction-aware effective shadow width 2b = H(r), Nihei eq. 13 --
+    Diffraction-aware effective shadow width 2b = H(r), BWK09 eq. 13 --
     astropy-units wrapper around
     :func:`kbo_occultation.upper_limits.effective_shadow_width_m`:
 
@@ -245,7 +249,7 @@ def detected_event_rate(radii_m, width_m, velocity, distance, diameter_break=80 
 
         mu = v (180 deg / pi / d)^2  integral W(R(D)) |dSigma/dD| dD,
 
-    with Sigma the cumulative surface density of Nihei et al. 2007 (eq. 11 below the break diameter, the
+    with Sigma the cumulative surface density of BWK09 (eq. 11 below the break diameter, the
     q_L = 4.8 power law above it, continuous at the break) and W(R) the detection width of the objects of
     diameter D = 2R (``min_size.detection_width``). For a constant W it reduces to ``event_rate`` with
     Sigma(> D_min).
