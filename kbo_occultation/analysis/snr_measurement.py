@@ -216,7 +216,7 @@ def detrended_snr(lc: LightCurve, n_bin: int, nsb: float, detrend_window_s: floa
     t, binned, _ = bin_average(lc.time, lc.signal, n_bin)
     baseline, _ = compute_baseline_and_sigma(
         t, binned, template_duration_s=detrend_window_s / 20.0,
-        detrend_window_s=detrend_window_s)
+        detrend_window_s=detrend_window_s, method="median")   # the SNR study's detrend, fixed
     sigma_frac = robust_sigma(binned / baseline - 1.0)
     level = float(np.median(baseline))
     star = level - nsb

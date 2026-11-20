@@ -58,6 +58,51 @@ def test_empirical_sigma_ignores_an_event():
     assert np.allclose(clean, dirty, rtol=0.05)
 
 
+def _filter_output(noise):
+    """(filter output a = corr / template norm, result) of the test template on 1 + noise."""
+    t = np.arange(N) * DT
+    tt, ti = _template()
+    res = sliding_matched_filter_snr(t, 1.0 + noise, tt, ti, normalization="global")
+    return res.snr * res.amp_sigma, res
+
+
+@pytest.mark.parametrize("red", [False, True])
+def test_sliding_sigma_gives_unit_snr(red):
+    rng = np.random.default_rng(7)
+    noise = _red_noise(rng) if red else 0.01 * rng.standard_normal(N)
+    std, res = _snr_std(noise, "empirical", sigma_method="sliding")
+    assert std == pytest.approx(1.0, rel=0.2)
+    assert res.sigma_method == "sliding"
+
+
+def test_sliding_sigma_does_not_depend_on_where_the_series_starts():
+    """Starting 1 s later moves the block edges (tens of percent on red noise), not the sliding window."""
+    a, _ = _filter_output(_red_noise(np.random.default_rng(8)))
+    w, k = int(round(20.0 / DT)), int(round(1.0 / DT))
+    spread = {}
+    for method in ("sliding", "blocks"):
+        r = empirical_filter_sigma(a[k:], w, method=method) / empirical_filter_sigma(a, w, method=method)[k:]
+        spread[method] = np.percentile(r, 95) / np.percentile(r, 5)
+    assert spread["sliding"] < 1.12
+    assert spread["blocks"] > spread["sliding"] + 0.3
+
+
+def test_sliding_sigma_mostly_ignores_an_event():
+    """A strong event raises the centred median by ~1.3x the fraction of the window it covers."""
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal(20000)
+    clean = empirical_filter_sigma(x, 2000, method="sliding")
+    x[10000:10040] += 30.0                       # 2 % of the window
+    dirty = empirical_filter_sigma(x, 2000, method="sliding")
+    assert np.allclose(clean, dirty, rtol=0.07)
+    assert np.allclose(clean[:8800], dirty[:8800]) and np.allclose(clean[11300:], dirty[11300:])
+
+
+def test_unknown_sigma_method_raises():
+    with pytest.raises(ValueError):
+        empirical_filter_sigma(np.ones(100), 10, method="bogus")
+
+
 def test_unknown_normalization_raises():
     t = np.arange(N) * DT
     tt, ti = _template()

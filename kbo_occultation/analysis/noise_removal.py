@@ -40,7 +40,7 @@ from ..observations.filtering import highpass_lightcurve
 from ..observations.photometry import LightCurve, good_time_lightcurve
 from ..simulation.kinematics import EARTH_SEMIMAJOR_AXIS_AU, shadow_velocity_opposition
 from .injection import inject_occultation
-from .mimic import (MimicConfig, _template_duration, bin_lightcurve, search_lightcurve,
+from .mimic import (MimicConfig, _template_duration, bank_instrument, bin_lightcurve, search_lightcurve,
                     search_templates, star_bank, star_mas_for)
 from .spectra import lightcurve_psd
 
@@ -212,7 +212,9 @@ def real_candidates(lc_full: LightCurve, method: Method, templates_m, dur: float
                     cfg: ComparisonConfig):
     """Blind search of the corrected, good-time-cropped, binned real run."""
     corrected = bin_lightcurve(good_time_lightcurve(method.correct(lc_full), good_time), cfg.mimic.bin_samples)
-    rows, _, _ = search_lightcurve(corrected, templates_m, cfg.snr_floor, dur, cfg.mimic.sigma_window_s)
+    rows, _, _ = search_lightcurve(corrected, templates_m, cfg.snr_floor, dur, cfg.mimic.sigma_window_s,
+                                   sigma_method=cfg.mimic.sigma_method,
+                                   baseline_method=cfg.mimic.baseline_method)
     rows = [r for r in rows if not _vetoed([r["time_s"]], method)[0]]
     return rows, len(corrected.time) * corrected.dt
 
@@ -260,7 +262,8 @@ def injection_efficiency(lc_full: LightCurve, method: Method, corrected_full: Li
             window = LightCurve(seg.time, base_seg + (corr - clean), meta=dict(seg.meta))
             window = bin_lightcurve(window, cfg.mimic.bin_samples)
             rows, _, _ = search_lightcurve(window, {radius: templates_m[radius]}, threshold, dur,
-                                           cfg.mimic.sigma_window_s)
+                                           cfg.mimic.sigma_window_s, sigma_method=cfg.mimic.sigma_method,
+                                           baseline_method=cfg.mimic.baseline_method)
             ok = any(abs(r["time_s"] - t0) <= tol and r["snr"] >= threshold for r in rows)
             hits[radius] += int(ok and not veto)
     return {r: hits[r] / len(t0s) for r in radii}
@@ -310,7 +313,7 @@ def injection_efficiency_array(lcs_full: Dict[str, LightCurve], methods: Dict[st
                                rng: np.random.Generator, radii: Sequence[float], *,
                                direction_enu: Optional[np.ndarray] = None,
                                corrected_full: Optional[Dict[str, LightCurve]] = None,
-                               array: ArrayConfig = ORM_ARRAY) -> Tuple[List[dict], List[dict]]:
+                               array: ArrayConfig = ORM_ARRAY, matched: bool = False) -> Tuple[List[dict], List[dict]]:
     """
     Star-only injections of the same event into every channel of one run, searched as the real
     data are (``real_candidates``: corrected, good-time cropped, binned, blind search with the
@@ -323,6 +326,8 @@ def injection_efficiency_array(lcs_full: Dict[str, LightCurve], methods: Dict[st
     for all channels; each channel's pattern is shifted by the shadow travel time
     (``shadow_offsets_s``, a new random azimuth per trial when ``direction_enu`` is None).
     Same affine trick as ``injection_efficiency``: only a +-``segment_s`` window is re-corrected.
+    ``matched``: the event of each radius is searched with the template of that radius alone
+    (``templates_m[ch][radius]``), not with the best of the bank.
 
     Returns ``(trials, candidates)`` row lists. trials: one row per (trial, channel, radius) with
     t0_s, offset_s, star_fraction, peak_snr / peak_dt_s (largest SNR of the bank within
@@ -361,8 +366,10 @@ def injection_efficiency_array(lcs_full: Dict[str, LightCurve], methods: Dict[st
                 corr = method.correct(LightCurve(seg.time, inj.injected_signal, meta=dict(seg.meta))).signal
                 window = bin_lightcurve(LightCurve(seg.time[keep], (base + (corr - clean))[keep],
                                                    meta=dict(seg.meta)), bin_n)
-                rows, _, calib = search_lightcurve(window, templates_m[ch], cfg.snr_floor, dur,
-                                                   cfg.mimic.sigma_window_s,
+                bank_r = {float(radius): templates_m[ch][float(radius)]} if matched else templates_m[ch]
+                rows, _, calib = search_lightcurve(window, bank_r, cfg.snr_floor, dur,
+                                                   cfg.mimic.sigma_window_s, sigma_method=cfg.mimic.sigma_method,
+                                                   baseline_method=cfg.mimic.baseline_method,
                                                    peak_near=(t0c, cfg.peak_window_s))
                 trials.append({"trial": k, "channel": ch, "radius_m": float(radius), "t0_s": t0c,
                                "offset_s": offsets[ch], "star_fraction": star_fractions[ch],
@@ -413,11 +420,12 @@ def run_comparison(log, nights=None, cfg: Optional[ComparisonConfig] = None, *,
         for obs in night.stars.values():
             if not obs.has_cache:
                 continue
-            templates_raw = star_bank(cfg.mimic, obs, v)          # the bank of this star's size
             star_mas = star_mas_for(cfg.mimic, obs)
             for ch in night.channels:
                 lc_full = obs.lightcurve(ch)
                 dc_key = night.telescope(ch).dc_key
+                templates_raw = star_bank(cfg.mimic, obs, v, bank_instrument(     # this star's size, this telescope's response
+                    night.telescope(ch).name, getattr(night, "optical_filter", None)))
                 methods = build_methods(lc_full, night.dc_report, dc_key, cfg.methods)
                 for name, m in methods.items():
                     say(f"{night.name} {obs.name} {ch} {name}: real search")

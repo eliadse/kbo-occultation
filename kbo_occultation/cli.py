@@ -19,6 +19,7 @@ import argparse
 import os
 import sys
 import warnings
+from dataclasses import replace
 
 import pandas as pd
 
@@ -128,7 +129,11 @@ def cmd_mimic(args):
                       n_surrogates=args.surrogates, n_shifts=args.shifts, bin_samples=args.bin_samples,
                       star_mas=args.star_mas if args.star_mas is not None else 0.03,
                       per_star_size=args.star_mas is None, distance_au=args.distance_au, seed=args.seed,
-                      sigma_window_s=args.sigma_window)
+                      sigma_window_s=args.sigma_window, response="band" if args.band_templates else "telescope")
+    if args.sigma_method:
+        cfg = replace(cfg, sigma_method=args.sigma_method)
+    if args.baseline_method:
+        cfg = replace(cfg, baseline_method=args.baseline_method)
     res = run_mimic(log, nights, cfg, include_excluded=args.include_excluded,
                     progress=lambda m: print(m, file=sys.stderr))
     tag = "all" if not args.nights or args.nights == ["all"] else "_".join(nights)
@@ -204,9 +209,15 @@ def build_parser():
     s.add_argument("--bin-samples", type=int, default=10, help="samples averaged before the search")
     s.add_argument("--star-mas", type=float, default=None,
                    help="fixed stellar angular radius [mas] of the templates (default: each star's own, from its B magnitude)")
-    s.add_argument("--distance-au", type=float, default=40.0)
+    s.add_argument("--distance-au", type=float, default=39.0, help="Earth -> KBO distance [AU] of the templates")
+    s.add_argument("--band-templates", action="store_true",
+                   help="templates through the 320-450 nm trapezoid of the older search, not the telescopes' response")
     s.add_argument("--sigma-window", type=float, default=None,
                    help="window [s] of the empirical filter-output sigma (default: detrend window)")
+    s.add_argument("--sigma-method", choices=["sliding", "blocks"], default=None,
+                   help="empirical filter-output sigma: centred rolling median or block medians (default: MimicConfig's)")
+    s.add_argument("--baseline-method", choices=["clipped_triangle", "median"], default=None,
+                   help="search baseline (default: MimicConfig's)")
     s.add_argument("--seed", type=int, default=0)
     s.add_argument("--out", default="outputs/mimic", help="output directory")
     s.add_argument("--include-excluded", action="store_true", help="also use nights/observations marked exclude")

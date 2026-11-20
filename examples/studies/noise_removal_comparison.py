@@ -16,6 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+from kbo_occultation.analysis.mimic import MimicConfig
 from kbo_occultation.analysis.noise_removal import ComparisonConfig, run_comparison, summarize
 from kbo_occultation.observations.log import load_observation_log
 
@@ -28,12 +29,18 @@ ap.add_argument("--trials", type=int, default=20, help="injections per run, chan
 ap.add_argument("--methods", nargs="+", default=None, help="only these methods (default: all)")
 ap.add_argument("--out", default=OUT_DIR, help="output directory")
 ap.add_argument("--include-excluded", action="store_true")
+ap.add_argument("--sigma-method", choices=["sliding", "blocks"], default=None,
+                help="empirical filter-output sigma of the search (default: MimicConfig's)")
+ap.add_argument("--baseline-method", choices=["clipped_triangle", "median"], default=None,
+                help="baseline of the search (default: MimicConfig's)")
 args = ap.parse_args()
 
 os.makedirs(OUT_DIR, exist_ok=True)
 OUT_DIR = args.out
 os.makedirs(OUT_DIR, exist_ok=True)
-cfg = ComparisonConfig(far_per_hr=args.far, n_trials=args.trials, methods=args.methods)
+mimic = MimicConfig(**{k: v for k, v in (("sigma_method", args.sigma_method),
+                                         ("baseline_method", args.baseline_method)) if v is not None})
+cfg = ComparisonConfig(mimic=mimic, far_per_hr=args.far, n_trials=args.trials, methods=args.methods)
 thr, eff, cand = run_comparison(load_observation_log(), args.nights or None, cfg,
                                 include_excluded=args.include_excluded, progress=print)
 thr.to_csv(f"{OUT_DIR}/thresholds.csv", index=False)

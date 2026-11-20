@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple
 
 import numpy as np
-from scipy.ndimage import median_filter
+from scipy.ndimage import median_filter, uniform_filter1d
 from scipy.signal import correlate, find_peaks
 
 from ..stats import robust_sigma  # re-exported: robust_sigma used to live here
@@ -46,6 +46,8 @@ class MatchedFilterResult:
     amp_sigma: Optional[np.ndarray] = None
     template_norm: float = 1.0
     normalization: str = "empirical"
+    # empirical_filter_sigma method behind amp_sigma (normalization="empirical" only)
+    sigma_method: Optional[str] = None
 
 
 @dataclass
@@ -55,11 +57,30 @@ class Candidate:
     chi2_reduced: float
 
 
+BaselineMethod = Literal["median", "clipped_triangle"]
+
+
+def _clipped_triangle(x: np.ndarray, window: int, clip_k: float = 3.0) -> np.ndarray:
+    """
+    Robust but linear smoothing of ``x`` over ``window`` samples: points more
+    than ``clip_k`` robust sigmas from the rolling median are replaced by that
+    median, then a triangular kernel of full width ``window`` (two running
+    means of window/2) is applied.
+    """
+    med = median_filter(x, size=window, mode="reflect")
+    dev = x - med
+    spread = 1.4826 * median_filter(np.abs(dev), size=window, mode="reflect")
+    kept = np.where(np.abs(dev) > clip_k * spread, med, x)
+    half = max(window // 2, 1)
+    return uniform_filter1d(uniform_filter1d(kept, size=half, mode="reflect"), size=half, mode="reflect")
+
+
 def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_duration_s: float,
                                 detrend_window_s: Optional[float] = None,
-                                decimate="auto") -> Tuple[np.ndarray, np.ndarray]:
+                                decimate="auto",
+                                method: BaselineMethod = "median") -> Tuple[np.ndarray, np.ndarray]:
     """
-    Rolling-median baseline (scipy.ndimage.median_filter) and a local,
+    Rolling baseline and a local,
     per-sample robust noise level of the resulting residual, factored
     out of sliding_matched_filter_snr so it can be computed once and reused
     (e.g. injection_batch.py caches this per noise-reduction method
@@ -89,6 +110,18 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
         across the window still rejects. "auto" picks
         stride = window // 64; pass an int for an explicit stride, or
         1 for the exact (slow) full-resolution median.
+    method : {"median", "clipped_triangle"}
+        ``"median"``: rolling median (scipy.ndimage.median_filter). Robust,
+        but on red noise it moves in steps (it switches between values), and
+        the template, whose mean is not zero, responds to steps: the filter
+        output of Gaussian noise gets heavy tails (excess kurtosis ~0.5-1).
+        ``"clipped_triangle"``: values more than 3 robust sigmas from the
+        rolling median (a dip, a glitch, a DC excursion) are replaced by that
+        median, then a triangular kernel of full width the window smooths the
+        rest. Linear wherever nothing is clipped, so Gaussian noise stays
+        Gaussian; the triangle's weak frequency sidelobes let less slow wander
+        into the filter output than a plain running mean
+        (notebooks/baseline_study.ipynb).
 
     Returns
     -------
@@ -123,8 +156,14 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
     else:
         stride = max(1, int(decimate))
 
+    if method not in ("median", "clipped_triangle"):
+        raise ValueError(f"Unknown baseline method {method!r}")
+
     if stride == 1:
-        baseline = median_filter(signal, size=window_samples, mode="reflect")
+        if method == "median":
+            baseline = median_filter(signal, size=window_samples, mode="reflect")
+        else:
+            baseline = _clipped_triangle(signal, window_samples)
         residual = signal / baseline - 1.0
         # After detrending the residual is ~zero-median locally, so a
         # rolling median of |residual| over the window is the local MAD.
@@ -135,7 +174,10 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
         sig_blocks = signal[:n_blocks * stride].reshape(-1, stride).mean(axis=1)
         t_blocks = time[:n_blocks * stride].reshape(-1, stride).mean(axis=1)
         window_dec = max(window_samples // stride, 3)
-        baseline_dec = median_filter(sig_blocks, size=window_dec, mode="reflect")
+        if method == "median":
+            baseline_dec = median_filter(sig_blocks, size=window_dec, mode="reflect")
+        else:
+            baseline_dec = _clipped_triangle(sig_blocks, window_dec)
         baseline = np.interp(time, t_blocks, baseline_dec)
 
         residual = signal / baseline - 1.0
@@ -154,27 +196,43 @@ def compute_baseline_and_sigma(time: np.ndarray, signal: np.ndarray, template_du
 
 
 Normalization = Literal["local_block", "global", "empirical"]
+SigmaMethod = Literal["sliding", "blocks"]
 
 
 def empirical_filter_sigma(amplitude: np.ndarray, window_samples: int,
-                           block_samples: Optional[int] = None) -> np.ndarray:
+                           block_samples: Optional[int] = None,
+                           method: SigmaMethod = "blocks") -> np.ndarray:
     """
     Rolling robust (1.4826 * median|x|) scatter of the matched-filter output
-    itself, per lag.
-
-    The output is measured block by block (blocks of ``block_samples``,
-    default ``window_samples // 8``), and the per-block values are
-    median-smoothed over ``window_samples`` and interpolated back to
-    every lag. Because the output of a filter on red noise is strongly
+    itself, per lag. Because the output of a filter on red noise is strongly
     correlated, this -- unlike sigma_data / sqrt(sum T^2) -- includes the
     noise power inside the template's own band.
 
-    An event occupies about one template length, i.e. a small part of one
-    block, and the MAD (50 % breakdown) plus the median across blocks
-    reject it, which is the "exclude +-1 template around the peak" of the
-    plan done implicitly: no event can move the estimate unless it covers
-    half of a block.
+    ``method="sliding"``: the median of |x| over a window of
+    ``window_samples`` centred on every lag (evaluated every
+    ``window_samples // 320`` lags and interpolated: the output is smooth on
+    the template scale, so this loses nothing). No block edges, so the
+    estimate does not depend on where the series starts.
+
+    ``method="blocks"``: the output is measured block by block (blocks of
+    ``block_samples``, default ``window_samples // 8``), and the per-block
+    values are median-smoothed over ``window_samples`` and interpolated back
+    to every lag. On red noise the filter output is correlated over about
+    one block, so each block holds ~1 independent value and the estimate
+    depends on the block edges by tens of percent, and the median of the
+    skewed block values reads ~7 % low (notebooks/sigma_estimator_study.ipynb).
+
+    An event occupies about one template length, a small part of the window,
+    and the median (50 % breakdown) rejects it, which is the "exclude +-1
+    template around the peak" of the plan done implicitly. With "sliding" a
+    strong event still raises the estimate at its own lag by ~1.3x the
+    fraction of the window it covers (~4-8 % for 1-5 %); "blocks" confines it
+    to one block value.
     """
+    if method == "sliding":
+        return _sliding_filter_sigma(np.asarray(amplitude), window_samples)
+    if method != "blocks":
+        raise ValueError(f"Unknown sigma method {method!r}")
     n = len(amplitude)
     block = max(int(block_samples or max(window_samples // 8, 8)), 8)
     n_blocks = n // block
@@ -192,6 +250,18 @@ def empirical_filter_sigma(amplitude: np.ndarray, window_samples: int,
     return np.interp(np.arange(n), centers, sigma_blocks)
 
 
+def _sliding_filter_sigma(amplitude: np.ndarray, window_samples: int) -> np.ndarray:
+    """empirical_filter_sigma(method="sliding"): centred rolling median of |x|."""
+    n = len(amplitude)
+    step = max(1, int(window_samples) // 320)
+    sub = np.abs(amplitude[::step])
+    if len(sub) < 3:
+        return np.full(n, 1.4826 * np.median(np.abs(amplitude)))
+    size = max(int(window_samples) // step, 3) | 1
+    med = median_filter(sub, size=size, mode="reflect")
+    return np.interp(np.arange(n), np.arange(len(sub)) * step, 1.4826 * med)
+
+
 def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
                                 template_time: np.ndarray, template_intensity: np.ndarray,
                                 detrend_window_s: Optional[float] = None,
@@ -199,18 +269,18 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
                                 sigma: Optional[np.ndarray] = None,
                                 normalization: Normalization = "empirical",
                                 amp_sigma: Optional[np.ndarray] = None,
-                                sigma_window_s: Optional[float] = None) -> MatchedFilterResult:
+                                sigma_window_s: Optional[float] = None,
+                                sigma_method: SigmaMethod = "blocks",
+                                baseline_method: BaselineMethod = "median") -> MatchedFilterResult:
     """
-    Slide (template_time, template_intensity) -- a noiseless simulated
-    diffraction pattern already converted to time, e.g. via
-    detectability.spatial_to_time -- across (time, signal) and compute
-    the matched-filter SNR at every lag.
+    Slide (template_time, template_intensity) a noiseless simulated diffraction pattern 
+    in time units, e.g. via detectability.spatial_to_time, across (time, signal) 
+    and compute the matched-filter SNR at every lag.
 
     Parameters
     ----------
     time, signal : array_like
-        Light curve to search (real or injected-real), on a uniform
-        time grid.
+        Light curve to search (real or injected-real), on a uniform time grid.
     template_time, template_intensity : array_like
         Noiseless template, time-relative (need not be centered on
         t=0; only its shape and native resolution matter here).
@@ -248,6 +318,13 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         by tens of percent along the run, which fattens the SNR tails; use a
         longer window (a few minutes, or the whole run) when the noise is
         stationary enough.
+    sigma_method : {"blocks", "sliding"}
+        ``empirical_filter_sigma`` method for ``normalization="empirical"``.
+        "sliding" (a centred rolling median, no block edges) is the less
+        noisy and unbiased one; "blocks" is the original.
+    baseline_method : {"median", "clipped_triangle"}
+        ``compute_baseline_and_sigma`` method, when the baseline is computed
+        here (i.e. not passed in).
     amp_sigma : ndarray, optional
         Precomputed per-lag filter-output sigma (``MatchedFilterResult.
         amp_sigma`` of a search on the same template), length
@@ -275,7 +352,8 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
 
     # --- detrend: rolling-median baseline, then normalise ---
     if baseline is None or sigma is None:
-        baseline, sigma = compute_baseline_and_sigma(time, signal, template_duration_s, detrend_window_s)
+        baseline, sigma = compute_baseline_and_sigma(time, signal, template_duration_s, detrend_window_s,
+                                                     method=baseline_method)
     norm_signal = signal / baseline
 
     # --- matched filter: FFT cross-correlation of the detrended data with the template variation ---
@@ -299,7 +377,7 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
     elif normalization == "empirical":
         window_s = sigma_window_s or detrend_window_s or 20.0 * template_duration_s
         window_samples = max(int(round(window_s / dt)), M)
-        amp_sigma = empirical_filter_sigma(correlation / template_norm, window_samples)
+        amp_sigma = empirical_filter_sigma(correlation / template_norm, window_samples, method=sigma_method)
     elif normalization == "global":
         amp_sigma = np.full(n_lag, robust_sigma(residual_data))
     elif normalization == "local_block":
@@ -323,6 +401,7 @@ def sliding_matched_filter_snr(time: np.ndarray, signal: np.ndarray,
         amp_sigma=amp_sigma,
         template_norm=template_norm,
         normalization=normalization,
+        sigma_method=sigma_method if normalization == "empirical" else None,
     )
 
 

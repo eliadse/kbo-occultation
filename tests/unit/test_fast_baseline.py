@@ -57,6 +57,61 @@ def test_decimate_one_is_exact_path():
     assert np.array_equal(b1, b2) and np.array_equal(s1, s2)
 
 
+def test_clipped_triangle_follows_the_trend_and_ignores_a_dip():
+    t, trend, signal = make_lightcurve()
+    base, _ = compute_baseline_and_sigma(t, signal, 0.3, method="clipped_triangle")
+    rel = np.abs(base / trend - 1.0)
+    assert np.sqrt((rel ** 2).mean()) < 1e-3 and rel.max() < 5e-3
+
+    t, trend, signal = make_lightcurve(dip=True)
+    near_dip = np.abs(t - t[len(t) // 2]) < 1.0
+    base, _ = compute_baseline_and_sigma(t, signal, 0.3, method="clipped_triangle")
+    assert np.max(np.abs(base[near_dip] / trend[near_dip] - 1.0)) < 0.002
+
+
+def test_clipped_triangle_is_not_pulled_by_a_bright_excursion():
+    """A 1 s +5 % excursion: clipped, so the baseline around it stays on the trend (better than the median)."""
+    t, trend, signal = make_lightcurve()
+    signal = signal.copy()
+    signal[(t > 50) & (t < 51)] *= 1.05
+    near = (t > 45) & (t < 56)
+    dev = {m: np.max(np.abs(compute_baseline_and_sigma(t, signal, 0.3, method=m)[0][near] / trend[near] - 1.0))
+           for m in ("median", "clipped_triangle")}
+    assert dev["clipped_triangle"] < 0.0015
+    assert dev["clipped_triangle"] < dev["median"]
+
+
+def test_clipped_triangle_keeps_gaussian_noise_gaussian():
+    """On 1/f Gaussian noise the median's steps give the filter output heavy tails; the clipped triangle does not."""
+    from scipy.stats import kurtosis
+    from kbo_occultation.analysis.matched_filter import sliding_matched_filter_snr
+
+    n, dt = 60000, 0.01
+    t = np.arange(n) * dt
+    tt = np.arange(-0.5, 0.5, dt)
+    ti = 1.0 - 0.3 * np.exp(-0.5 * (tt / 0.1) ** 2) * np.cos(6 * tt) ** 2
+    f = np.fft.rfftfreq(n, dt)
+    spec = np.where(f >= 0.01, 1.0 / np.maximum(f, 0.01), 0.0)
+    kurt = {"median": [], "clipped_triangle": []}
+    for seed in range(8):
+        rng = np.random.default_rng(200 + seed)
+        x = np.fft.irfft(spec * np.exp(2j * np.pi * rng.random(len(f))), n=n)
+        noise = 0.02 * x / x.std() + 0.005 * np.random.default_rng(300 + seed).standard_normal(n)
+        for method in kurt:
+            b, s = compute_baseline_and_sigma(t, 1.0 + noise, 1.0, method=method)
+            r = sliding_matched_filter_snr(t, 1.0 + noise, tt, ti, baseline=b, sigma=s, normalization="global")
+            kurt[method].append(kurtosis(r.snr[200:-200]))
+    assert np.mean(kurt["clipped_triangle"]) < 0.5
+    assert np.mean(kurt["median"]) > np.mean(kurt["clipped_triangle"]) + 0.3
+
+
+def test_unknown_baseline_method_raises():
+    import pytest
+    t, _, signal = make_lightcurve(n=2000)
+    with pytest.raises(ValueError):
+        compute_baseline_and_sigma(t, signal, 0.3, method="bogus")
+
+
 def apply_stellar_disk_2d_loop(x_m, intensity_radial, r_grid_m, star_radius_m,
                                impact_parameter_m, n_star_side):
     """Pre-vectorization reference implementation."""
